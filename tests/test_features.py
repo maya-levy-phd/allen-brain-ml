@@ -1,3 +1,4 @@
+import pytest
 import numpy as np
 from allen_brain_ml.features import firing_rate
 
@@ -15,3 +16,12 @@ def test_firing_rate_array():
         firing_rate(spike_counts, durations),
         expected,
     )
+
+def test_firing_rate_zero_duration():
+    with pytest.raises(ValueError):
+        firing_rate(20, 0.0)
+
+def test_firing_rate_negative_duration():
+    with pytest.raises(ValueError):
+        firing_rate(20, -2.0)
+
