@@ -1,5 +1,5 @@
-import pytest
 from unittest.mock import Mock, call, patch
+import pytest
 from allen_brain_ml.allen_api import (
     BASE_URL,
     CELL_CRITERIA,
@@ -29,7 +29,7 @@ def test_get_specimens():
         result = get_specimens(limit=2)
 
         mock_get.assert_called_once_with(
-      BASE_URL,
+            BASE_URL,
             params={
                 "criteria": "model::Specimen",
                 "num_rows": 2,
@@ -87,7 +87,7 @@ def test_get_cells():
         mock_get.assert_called_once_with(
             BASE_URL,
             params={
-                "criteria": "model::Cell",
+                "criteria": "model::ApiCellTypesSpecimenDetail",
                 "num_rows": 2,
                 "start_row": 0,
             },
@@ -190,8 +190,8 @@ def test_stops_when_no_more_records(get_records):
         "num_rows": 2,
         "total_rows": 2,
         "msg": [
-            {"id": 1,},
-            {"id": 2,},
+            {"id": 1},
+            {"id": 2},
         ],
     }
 
