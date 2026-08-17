@@ -3,13 +3,35 @@
 import requests
 
 BASE_URL = "https://api.brain-map.org/api/v2/data/query.json"
+SPECIMEN_CRITERIA = "model::Specimen"
+EXPERIMENT_CRITERIA = "model::Experiment"
+CELL_CRITERIA = "model::Cell"
+
+def get_cells(limit: int = 100, page_size: int = 100) -> list[dict]:
+    """Retrieve up to limit cells records from the Allen API."""
+    return _get_paginated(
+        url=BASE_URL,
+        params={"criteria": CELL_CRITERIA},
+        limit=limit,
+        page_size=page_size,
+    )
+
+
+def get_experiments(limit: int = 100, page_size: int = 100) -> list[dict]:
+    """Retrieve up to limit experiments records from the Allen API."""
+    return _get_paginated(
+        url=BASE_URL,
+        params={"criteria": EXPERIMENT_CRITERIA},
+        limit=limit,
+        page_size=page_size,
+    )
 
 
 def get_specimens(limit: int = 100, page_size: int = 100) -> list[dict]:
     """Retrieve up to limit specimen records from the Allen API."""
     return _get_paginated(
         url=BASE_URL,
-        params={"criteria": "model::Specimen"},
+        params={"criteria": SPECIMEN_CRITERIA},
         limit=limit,
         page_size=page_size,
     )
