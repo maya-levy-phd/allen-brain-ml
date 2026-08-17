@@ -1,10 +1,86 @@
-import pytest
+import json
+from unittest.mock import patch
+
 import numpy as np
-from allen_brain_ml.data import clean_session_name, normalize_session_names, validate_duration
+import pytest
+
+from allen_brain_ml.data import (
+    clean_session_name,
+    load_cell_records,
+    load_or_fetch_cell_records,
+    normalize_session_names,
+    save_cell_records,
+    validate_duration,
+)
+
+
+def test_load_or_fetch_cell_records_fetches_when_cache_missing(tmp_path):
+    fetched_records = [{"specimen__id": 1}]
+    cache_path = tmp_path / "raw" / "cells.json"
+
+    with patch(
+        "allen_brain_ml.data.get_cells",
+        return_value=fetched_records,
+    ) as mock_get_cells:
+        result = load_or_fetch_cell_records(cache_path)
+
+    assert result == fetched_records
+    assert json.loads(
+        cache_path.read_text(encoding="utf-8")
+    ) == fetched_records
+
+    mock_get_cells.assert_called_once()
+
+
+def test_load_or_fetch_cell_records_uses_cache(tmp_path):
+    cached_records = [{"specimen__id": 1}]
+    cache_path = tmp_path / "cells.json"
+    cache_path.write_text(
+        json.dumps(cached_records),
+        encoding="utf-8",
+    )
+
+    with patch("allen_brain_ml.data.get_cells") as mock_get_cells:
+        result = load_or_fetch_cell_records(cache_path)
+
+    assert result == cached_records
+    mock_get_cells.assert_not_called()
+
+
+def test_save_cell_records(tmp_path):
+    records = [
+        {"specimen__id": 1},
+        {"specimen__id": 2},
+    ]
+    cache_path = tmp_path / "raw" / "cells.json"
+
+    save_cell_records(records, cache_path)
+
+    saved_records = json.loads(
+        cache_path.read_text(encoding="utf-8")
+    )
+
+    assert saved_records == records
+
+
+def test_load_cell_records_from_cache(tmp_path):
+    cached_records = [
+        {"specimen__id": 1, "donor__species": "Homo Sapiens"},
+        {"specimen__id": 2, "donor__species": "Mus musculus"},
+    ]
+    cache_path = tmp_path / "cells.json"
+    cache_path.write_text(
+        json.dumps(cached_records),
+        encoding="utf-8",
+    )
+
+    result = load_cell_records(cache_path)
+
+    assert result == cached_records
 
 
 def test_clean_session_name():
-    assert clean_session_name('   session_001   ') == 'session_001'
+    assert clean_session_name("   session_001   ") == "session_001"
 
 
 def test_normalize_session_names():
@@ -15,6 +91,7 @@ def test_normalize_session_names():
         "session_003",
     ]
 
+
 def test_validate_duration():
     validate_duration(2.0)
 
@@ -22,13 +99,16 @@ def test_validate_duration_zero():
     with pytest.raises(ValueError):
         validate_duration(0.0)
 
+
 def test_validate_duration_negative():
     with pytest.raises(ValueError):
         validate_duration(-1.0)
 
+
 def test_validate_duration_array():
     durations = np.array([1.0, 2.5, 10.0])
     validate_duration(durations)
+
 
 def test_validate_duration_array_with_invalid_value():
     durations = np.array([1.0, 0.0, 2.0])
