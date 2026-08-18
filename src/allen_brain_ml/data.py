@@ -3,7 +3,6 @@
 import json
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 from allen_brain_ml.allen_api import get_cells
@@ -55,21 +54,3 @@ def load_cell_records(cache_path: Path) -> list[dict]:
     """Load raw cell records from a JSON cache."""
     with cache_path.open(encoding="utf-8") as cache_file:
         return json.load(cache_file)
-
-
-def clean_session_name(name: str) -> str:
-    """Return a session name with surrounding whitespace removed."""
-    return name.strip()
-
-
-def normalize_session_names(names: list[str]) -> list[str]:
-    """Clean whitespace from a collection of session names."""
-    return [name.strip() for name in names]
-
-
-def validate_duration(
-    duration_seconds: float | np.ndarray,
-) -> None:
-    """Validate that all durations are strictly positive."""
-    if np.any(duration_seconds <= 0):
-        raise ValueError("Duration must be greater than zero.")
