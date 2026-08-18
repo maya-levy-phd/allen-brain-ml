@@ -8,6 +8,7 @@ from allen_brain_ml.data import (
     load_or_fetch_cell_records,
     prepare_cell_data,
 )
+from allen_brain_ml.features import get_ephys_feature_columns
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -53,17 +54,6 @@ def select_mouse_cells(
     return unique_cells.loc[
         unique_cells["donor__species"] == "Mus musculus"
     ].copy()
-
-
-def get_ephys_columns(
-    cells: pd.DataFrame,
-) -> list[str]:
-    """Return the names of electrophysiology columns."""
-    return [
-        column
-        for column in cells.columns
-        if column.startswith("ef__")
-    ]
 
 
 def print_ephys_audit(
@@ -316,7 +306,7 @@ def main() -> None:
 
     print_dataset_overview(cell_records, unique_cells)
 
-    ephys_columns = get_ephys_columns(mouse_cells)
+    ephys_columns = get_ephys_feature_columns(mouse_cells)
 
     print_dataset_overview(cell_records, unique_cells)
     print_ephys_audit(mouse_cells, ephys_columns)
