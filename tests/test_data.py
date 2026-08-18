@@ -3,6 +3,8 @@ from unittest.mock import patch
 
 import numpy as np
 import pytest
+import pandas as pd
+from pandas.testing import assert_frame_equal
 
 from allen_brain_ml.data import (
     clean_session_name,
@@ -11,7 +13,25 @@ from allen_brain_ml.data import (
     normalize_session_names,
     save_cell_records,
     validate_duration,
+    prepare_cell_data
 )
+
+
+def test_prepare_cell_data_removes_exact_duplicates():
+    records = [
+        {"specimen__id": 1, "donor__species": "Mus musculus"},
+        {"specimen__id": 1, "donor__species": "Mus musculus"},
+        {"specimen__id": 2, "donor__species": "Homo Sapiens"},
+    ]
+
+    expected = pd.DataFrame([
+        {"specimen__id": 1, "donor__species": "Mus musculus"},
+        {"specimen__id": 2, "donor__species": "Homo Sapiens"},
+    ])
+
+    result = prepare_cell_data(records)
+
+    assert_frame_equal(result, expected)
 
 
 def test_load_or_fetch_cell_records_fetches_when_cache_missing(tmp_path):

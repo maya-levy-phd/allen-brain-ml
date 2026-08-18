@@ -4,8 +4,21 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
 from allen_brain_ml.allen_api import get_cells
+
+
+
+def prepare_cell_data(
+    records: list[dict],
+) -> pd.DataFrame:
+    """Create a deduplicated cell DataFrame from raw API records."""
+    return (
+        pd.DataFrame(records)
+        .drop_duplicates()
+        .reset_index(drop=True)
+    )
 
 
 def load_or_fetch_cell_records(
