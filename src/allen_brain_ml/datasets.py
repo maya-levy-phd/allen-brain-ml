@@ -1,6 +1,8 @@
-"""Construction of modeling datasets."""
+"""Construction and partitioning of modeling datasets."""
 
 import pandas as pd
+import numpy as np
+from sklearn.model_selection import StratifiedGroupKFold
 
 from allen_brain_ml.features import get_ephys_feature_columns
 
@@ -31,4 +33,32 @@ def build_classification_cohort(
         .dropna(subset=required_columns)
         .copy()
     )
+
+
+def make_grouped_holdout_split(
+    y: pd.Series,
+    groups: pd.Series,
+    *,
+    n_splits: int = 5,
+    random_state: int = 42,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return development and test indices with disjoint groups."""
+    splitter = StratifiedGroupKFold(
+        n_splits=n_splits,
+        shuffle=True,
+        random_state=random_state,
+    )
+
+    placeholder_features = np.zeros((len(y), 1))
+
+    development_indices, test_indices = next(
+        splitter.split(
+            placeholder_features,
+            y,
+            groups,
+        )
+    )
+
+    return development_indices, test_indices
+
 
