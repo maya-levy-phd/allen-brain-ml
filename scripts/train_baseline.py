@@ -1,6 +1,11 @@
 from pathlib import Path
 
 import pandas as pd
+from sklearn.dummy import DummyClassifier
+from sklearn.model_selection import (
+    StratifiedGroupKFold,
+    cross_validate,
+)
 
 from allen_brain_ml.data import (
     load_or_fetch_cell_records,
@@ -17,6 +22,14 @@ from allen_brain_ml.features import get_ephys_feature_columns
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CACHE_PATH = PROJECT_ROOT / "data" / "raw" / "cells.json"
+RANDOM_STATE = 42
+N_CV_SPLITS = 5
+
+SCORING = {
+    "accuracy": "accuracy",
+    "balanced_accuracy": "balanced_accuracy",
+    "macro_f1": "f1_macro",
+}
 
 
 def print_split_audit(
@@ -36,6 +49,21 @@ def print_split_audit(
     print(f"Cells: {len(y)}")
     print(f"Donors: {groups.nunique()}")
     print(class_summary)
+
+
+def print_cross_validation_results(
+    model_name: str,
+    results: dict,
+) -> None:
+    """Print the mean and standard deviation of CV scores."""
+    print(f"\n{model_name} cross-validation")
+
+    for metric in SCORING:
+        scores = results[f"test_{metric}"]
+        print(
+            f"{metric}: "
+            f"{scores.mean():.3f} +/- {scores.std():.3f}"
+        )
 
 
 def main() -> None:
@@ -81,6 +109,31 @@ def main() -> None:
 
     donor_overlap = set(groups_development).intersection(groups_test)
     print(f"\nDonor overlap: {len(donor_overlap)}")
+
+    cross_validator = StratifiedGroupKFold(
+        n_splits=N_CV_SPLITS,
+        shuffle=True,
+        random_state=RANDOM_STATE,
+    )
+
+    dummy_model = DummyClassifier(
+        strategy="most_frequent",
+    )
+
+    dummy_results = cross_validate(
+        dummy_model,
+        X_development,
+        y_development,
+        groups=groups_development,
+        cv=cross_validator,
+        scoring=SCORING,
+        error_score="raise",
+    )
+
+    print_cross_validation_results(
+        "Most-frequent dummy",
+        dummy_results,
+    )
 
 
 if __name__ == "__main__":
