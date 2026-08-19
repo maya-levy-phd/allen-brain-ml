@@ -17,6 +17,9 @@ from allen_brain_ml.datasets import (
     build_classification_cohort,
     make_grouped_holdout_split,
 )
+from allen_brain_ml.models import (
+    make_logistic_regression_pipeline,
+)
 from allen_brain_ml.features import get_ephys_feature_columns
 
 
@@ -133,6 +136,39 @@ def main() -> None:
     print_cross_validation_results(
         "Most-frequent dummy",
         dummy_results,
+    )
+
+    cross_validation_splits = list(
+        cross_validator.split(
+            X_development,
+            y_development,
+            groups_development,
+        )
+    )
+
+    dummy_results = cross_validate(
+        dummy_model,
+        X_development,
+        y_development,
+        cv=cross_validation_splits,
+        scoring=SCORING,
+        error_score="raise",
+    )
+
+    logistic_model = make_logistic_regression_pipeline()
+
+    logistic_results = cross_validate(
+        logistic_model,
+        X_development,
+        y_development,
+        cv=cross_validation_splits,
+        scoring=SCORING,
+        error_score="raise",
+    )
+
+    print_cross_validation_results(
+        "Unweighted logistic regression",
+        logistic_results,
     )
 
 
