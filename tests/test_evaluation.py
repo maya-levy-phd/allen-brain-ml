@@ -3,7 +3,11 @@ import pandas as pd
 
 from sklearn.dummy import DummyClassifier
 
-from allen_brain_ml.evaluation import evaluate_classifier
+from allen_brain_ml.evaluation import (
+    evaluate_classifier,
+    make_paired_fold_comparison,
+    make_class_fold_diagnostics,
+)
 
 
 def test_evaluate_classifier_returns_scores_and_predictions():
@@ -57,3 +61,116 @@ def test_evaluate_classifier_returns_scores_and_predictions():
     )
     assert predictions.name == "predicted"
     assert len(predictions) == len(y)
+
+
+def test_make_paired_fold_comparison():
+    reference_scores = {
+        "test_macro_f1": np.array([0.25, 0.50, 0.75])
+    }
+    comparison_scores = {
+        "test_macro_f1": np.array([0.50, 0.25, 1.00])
+    }
+
+    result = make_paired_fold_comparison(
+        reference_scores,
+        comparison_scores,
+        metric="macro_f1",
+        reference_name="unweighted",
+        comparison_name="weighted",
+    )
+
+    expected = pd.DataFrame(
+        {
+            "fold": [1, 2, 3],
+            "unweighted_macro_f1": [0.25, 0.50, 0.75],
+            "weighted_macro_f1": [0.50, 0.25, 1.00],
+            "macro_f1_difference": [0.25, -0.25, 0.25],
+        }
+    )
+
+    pd.testing.assert_frame_equal(result, expected)
+
+
+def test_make_class_fold_diagnostics():
+    index = [10, 20, 30, 40, 50, 60]
+
+    y = pd.Series(
+        [
+            "sparse",
+            "aspiny",
+            "spiny",
+            "sparse",
+            "aspiny",
+            "spiny",
+        ],
+        index=index,
+    )
+    groups = pd.Series(
+        [1, 2, 3, 4, 5, 6],
+        index=index,
+    )
+
+    predictions_by_model = {
+        "unweighted": pd.Series(
+            [
+                "aspiny",
+                "aspiny",
+                "spiny",
+                "sparse",
+                "aspiny",
+                "aspiny",
+            ],
+            index=index,
+        ),
+        "weighted": pd.Series(
+            [
+                "sparse",
+                "sparse",
+                "spiny",
+                "sparse",
+                "sparse",
+                "spiny",
+            ],
+            index=index,
+        ),
+    }
+
+    cv_splits = [
+        (
+            np.array([3, 4, 5]),
+            np.array([0, 1, 2]),
+        ),
+        (
+            np.array([0, 1, 2]),
+            np.array([3, 4, 5]),
+        ),
+    ]
+
+    result = make_class_fold_diagnostics(
+        y,
+        groups,
+        predictions_by_model,
+        cv_splits=cv_splits,
+        class_label="sparse",
+    )
+
+    expected = pd.DataFrame(
+        {
+            "fold": [1, 1, 2, 2],
+            "model": [
+                "unweighted",
+                "weighted",
+                "unweighted",
+                "weighted",
+            ],
+            "class_cells": [1, 1, 1, 1],
+            "class_groups": [1, 1, 1, 1],
+            "precision": [0.0, 0.5, 1.0, 0.5],
+            "recall": [0.0, 1.0, 1.0, 1.0],
+            "f1": [0.0, 2 / 3, 1.0, 2 / 3],
+        }
+    )
+
+    pd.testing.assert_frame_equal(result, expected)
+
+
