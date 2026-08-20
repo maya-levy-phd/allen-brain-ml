@@ -1,10 +1,12 @@
 from pathlib import Path
 
 import pandas as pd
+from sklearn.metrics import classification_report
 from sklearn.dummy import DummyClassifier
 from sklearn.model_selection import (
     StratifiedGroupKFold,
     cross_validate,
+    cross_val_predict,
 )
 
 from allen_brain_ml.data import (
@@ -67,6 +69,45 @@ def print_cross_validation_results(
             f"{metric}: "
             f"{scores.mean():.3f} +/- {scores.std():.3f}"
         )
+
+
+
+def print_classification_diagnostics(
+    model_name: str,
+    actual_classes: pd.Series,
+    predicted_classes: pd.Series,
+) -> None:
+    """Print per-class metrics and confusion matrices."""
+    actual_classes = actual_classes.rename("actual")
+    predicted_classes = predicted_classes.rename("predicted")
+
+    print(f"\n{model_name} classification report")
+    print(
+        classification_report(
+            actual_classes,
+            predicted_classes,
+            digits=3,
+            zero_division=0,
+        )
+    )
+
+    confusion_counts = pd.crosstab(
+        actual_classes,
+        predicted_classes,
+        margins=True,
+    )
+
+    print("\nConfusion matrix: cell counts")
+    print(confusion_counts)
+
+    confusion_proportions = pd.crosstab(
+        actual_classes,
+        predicted_classes,
+        normalize="index",
+    )
+
+    print("\nConfusion matrix: row proportions")
+    print(confusion_proportions)
 
 
 def main() -> None:
@@ -170,6 +211,141 @@ def main() -> None:
         "Unweighted logistic regression",
         logistic_results,
     )
+
+    logistic_oof_predictions = cross_val_predict(
+        logistic_model,
+        X_development,
+        y_development,
+        cv=cross_validation_splits,
+        method="predict",
+    )
+
+    logistic_predicted_classes = pd.Series(
+        logistic_oof_predictions,
+        index=y_development.index,
+    )
+
+    print_classification_diagnostics(
+        "Unweighted logistic regression",
+        y_development,
+        logistic_predicted_classes,
+    )
+
+    class_weighted_logistic_model = (
+        make_logistic_regression_pipeline(
+            class_weight="balanced"
+        )
+    )
+
+    class_weighted_results = cross_validate(
+        class_weighted_logistic_model,
+        X_development,
+        y_development,
+        cv=cross_validation_splits,
+        scoring=SCORING,
+        error_score="raise",
+    )
+
+    print_cross_validation_results(
+        "Class-weighted logistic regression",
+        class_weighted_results,
+    )
+
+    class_weighted_oof_predictions = cross_val_predict(
+        class_weighted_logistic_model,
+        X_development,
+        y_development,
+        cv=cross_validation_splits,
+        method="predict",
+    )
+
+    class_weighted_predicted_classes = pd.Series(
+        class_weighted_oof_predictions,
+        index=y_development.index,
+    )
+
+    print_classification_diagnostics(
+        "Class-weighted logistic regression",
+        y_development,
+        class_weighted_predicted_classes,
+    )
+
+    fold_comparison = pd.DataFrame(
+        {
+            "fold": range(
+                1,
+                len(cross_validation_splits) + 1,
+            ),
+            "unweighted_macro_f1": (
+                logistic_results["test_macro_f1"]
+            ),
+            "weighted_macro_f1": (
+                class_weighted_results["test_macro_f1"]
+            ),
+        }
+    )
+
+    fold_comparison["macro_f1_difference"] = (
+            fold_comparison["weighted_macro_f1"]
+            - fold_comparison["unweighted_macro_f1"]
+    )
+
+    print("\nPaired macro-F1 comparison")
+    print(fold_comparison)
+
+    SPARSE_CLASS = "sparsely spiny"
+
+    prediction_sets = {
+        "unweighted": logistic_predicted_classes,
+        "weighted": class_weighted_predicted_classes,
+    }
+
+    fold_diagnostic_rows = []
+
+    for fold_number, (_, validation_indices) in enumerate(
+            cross_validation_splits,
+            start=1,
+    ):
+        actual_fold = y_development.iloc[validation_indices]
+        groups_fold = groups_development.iloc[validation_indices]
+        sparse_mask = actual_fold.eq(SPARSE_CLASS)
+
+        for model_name, all_predictions in prediction_sets.items():
+            predictions_fold = all_predictions.iloc[
+                validation_indices
+            ]
+
+            report = classification_report(
+                actual_fold,
+                predictions_fold,
+                output_dict=True,
+                zero_division=0,
+            )
+
+            sparse_metrics = report[SPARSE_CLASS]
+
+            fold_diagnostic_rows.append(
+                {
+                    "fold": fold_number,
+                    "model": model_name,
+                    "sparse_cells": sparse_mask.sum(),
+                    "sparse_donors": (
+                        groups_fold.loc[sparse_mask].nunique()
+                    ),
+                    "precision": sparse_metrics["precision"],
+                    "recall": sparse_metrics["recall"],
+                    "f1": sparse_metrics["f1-score"],
+                }
+            )
+
+    fold_diagnostics_df = pd.DataFrame(
+        fold_diagnostic_rows
+    )
+
+    formatted_diagnostics = fold_diagnostics_df.round(3)
+
+    print("\nSparse-class diagnostics by fold")
+    print(formatted_diagnostics.to_string(index=False))
 
 
 if __name__ == "__main__":
