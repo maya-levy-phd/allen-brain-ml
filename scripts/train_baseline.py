@@ -3,11 +3,7 @@ from pathlib import Path
 import pandas as pd
 from sklearn.metrics import classification_report
 from sklearn.dummy import DummyClassifier
-from sklearn.model_selection import (
-    StratifiedGroupKFold,
-    cross_validate,
-    cross_val_predict,
-)
+from sklearn.model_selection import StratifiedGroupKFold
 
 from allen_brain_ml.data import (
     load_or_fetch_cell_records,
@@ -23,6 +19,7 @@ from allen_brain_ml.models import (
     make_logistic_regression_pipeline,
 )
 from allen_brain_ml.features import get_ephys_feature_columns
+from allen_brain_ml.evaluation import evaluate_classifier
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -164,21 +161,6 @@ def main() -> None:
         strategy="most_frequent",
     )
 
-    dummy_results = cross_validate(
-        dummy_model,
-        X_development,
-        y_development,
-        groups=groups_development,
-        cv=cross_validator,
-        scoring=SCORING,
-        error_score="raise",
-    )
-
-    print_cross_validation_results(
-        "Most-frequent dummy",
-        dummy_results,
-    )
-
     cross_validation_splits = list(
         cross_validator.split(
             X_development,
@@ -187,42 +169,29 @@ def main() -> None:
         )
     )
 
-    dummy_results = cross_validate(
+    dummy_results, _ = evaluate_classifier(
         dummy_model,
         X_development,
         y_development,
-        cv=cross_validation_splits,
+        cv_splits=cross_validation_splits,
         scoring=SCORING,
-        error_score="raise",
     )
 
     logistic_model = make_logistic_regression_pipeline()
 
-    logistic_results = cross_validate(
-        logistic_model,
-        X_development,
-        y_development,
-        cv=cross_validation_splits,
-        scoring=SCORING,
-        error_score="raise",
+    logistic_results, logistic_predicted_classes = (
+        evaluate_classifier(
+            logistic_model,
+            X_development,
+            y_development,
+            cv_splits=cross_validation_splits,
+            scoring=SCORING,
+        )
     )
 
     print_cross_validation_results(
         "Unweighted logistic regression",
         logistic_results,
-    )
-
-    logistic_oof_predictions = cross_val_predict(
-        logistic_model,
-        X_development,
-        y_development,
-        cv=cross_validation_splits,
-        method="predict",
-    )
-
-    logistic_predicted_classes = pd.Series(
-        logistic_oof_predictions,
-        index=y_development.index,
     )
 
     print_classification_diagnostics(
@@ -237,31 +206,20 @@ def main() -> None:
         )
     )
 
-    class_weighted_results = cross_validate(
+    (
+        class_weighted_results,
+        class_weighted_predicted_classes,
+    ) = evaluate_classifier(
         class_weighted_logistic_model,
         X_development,
         y_development,
-        cv=cross_validation_splits,
+        cv_splits=cross_validation_splits,
         scoring=SCORING,
-        error_score="raise",
     )
 
     print_cross_validation_results(
         "Class-weighted logistic regression",
         class_weighted_results,
-    )
-
-    class_weighted_oof_predictions = cross_val_predict(
-        class_weighted_logistic_model,
-        X_development,
-        y_development,
-        cv=cross_validation_splits,
-        method="predict",
-    )
-
-    class_weighted_predicted_classes = pd.Series(
-        class_weighted_oof_predictions,
-        index=y_development.index,
     )
 
     print_classification_diagnostics(
