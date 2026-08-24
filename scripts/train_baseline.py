@@ -332,6 +332,48 @@ def main() -> None:
     print("\nPaired macro-F1 comparison between donor-weighted and unweighted")
     print(donor_fold_comparison)
 
+    class_and_donor_weighted_model = (
+        make_logistic_regression_pipeline(
+            class_weight="balanced",
+        )
+    )
+
+    (
+        class_and_donor_weighted_scores,
+        class_and_donor_weighted_predictions,
+    ) = evaluate_fold_weighted_classifier(
+        estimator=class_and_donor_weighted_model,
+        X=X_development,
+        y=y_development,
+        groups=groups_development,
+        cv=cross_validator,
+        scoring=SCORING,
+        sample_weight_factory=make_donor_sample_weights,
+    )
+
+    print_cross_validation_results(
+        "Combined class and donor weighted logistic regression",
+        class_and_donor_weighted_scores,
+    )
+
+    print_classification_diagnostics(
+        "Combined class and donor weighted logistic regression",
+        y_development,
+        class_and_donor_weighted_predictions,
+    )
+
+    combined_model_fold_comparison = make_paired_fold_comparison(
+        class_weighted_results,
+        class_and_donor_weighted_scores,
+        metric="macro_f1",
+        reference_name="class-weighted",
+        comparison_name="combined",
+    )
+
+    print("Paired macro-F1 comparison between class-and-donor-weighted "
+          "and class-weighted")
+    print(combined_model_fold_comparison)
+
 
 if __name__ == "__main__":
     main()
