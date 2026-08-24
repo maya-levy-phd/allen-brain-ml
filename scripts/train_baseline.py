@@ -14,6 +14,7 @@ from allen_brain_ml.datasets import (
     TARGET_COLUMN,
     build_classification_cohort,
     make_grouped_holdout_split,
+    make_donor_sample_weights,
 )
 from allen_brain_ml.models import (
     make_logistic_regression_pipeline,
@@ -23,6 +24,7 @@ from allen_brain_ml.evaluation import (
     evaluate_classifier,
     make_paired_fold_comparison,
     make_class_fold_diagnostics,
+    evaluate_fold_weighted_classifier,
 )
 
 
@@ -36,6 +38,22 @@ SCORING = {
     "balanced_accuracy": "balanced_accuracy",
     "macro_f1": "f1_macro",
 }
+
+
+def print_donor_weight_audit(
+    sample_weights: pd.Series,
+    groups: pd.Series,
+) -> None:
+    """Print summary statistics for cell- and donor-level weights."""
+    assert sample_weights.index.equals(groups.index)
+
+    donor_total_weights = sample_weights.groupby(groups).sum()
+
+    print("\nDonor sample-weight audit")
+    print(sample_weights.describe())
+
+    print("\nTotal weight per donor")
+    print(donor_total_weights.describe())
 
 
 def print_split_audit(
@@ -270,8 +288,49 @@ def main() -> None:
     print("\nSparse-class diagnostics by fold")
     print(formatted_diagnostics.to_string(index=False))
 
+    donor_weights = make_donor_sample_weights(groups_development)
+    print_donor_weight_audit(donor_weights, groups_development)
 
+    donor_weighted_model = (
+        make_logistic_regression_pipeline(
+            class_weight=None,
+        )
+    )
 
+    (
+        donor_weighted_scores,
+        donor_weighted_predictions,
+    ) = evaluate_fold_weighted_classifier(
+        estimator=donor_weighted_model,
+        X=X_development,
+        y=y_development,
+        groups=groups_development,
+        cv=cross_validator,
+        scoring=SCORING,
+        sample_weight_factory=make_donor_sample_weights,
+    )
+
+    print_cross_validation_results(
+        "Donor-weighted logistic regression",
+        donor_weighted_scores,
+    )
+
+    print_classification_diagnostics(
+        "Donor-weighted logistic regression",
+        y_development,
+        donor_weighted_predictions,
+    )
+
+    donor_fold_comparison = make_paired_fold_comparison(
+        logistic_results,
+        donor_weighted_scores,
+        metric="macro_f1",
+        reference_name="unweighted",
+        comparison_name="donor-weighted",
+    )
+
+    print("\nPaired macro-F1 comparison between donor-weighted and unweighted")
+    print(donor_fold_comparison)
 
 
 if __name__ == "__main__":

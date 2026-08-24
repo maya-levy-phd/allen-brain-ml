@@ -1,14 +1,93 @@
 """Reusable model-evaluation utilities."""
+from collections.abc import Callable
 
 import numpy as np
 import pandas as pd
 
-from sklearn.base import BaseEstimator
-from sklearn.metrics import classification_report
+from sklearn.base import (
+    BaseEstimator,
+    clone,
+)
+from sklearn.metrics import (
+    classification_report,
+    get_scorer,
+)
 from sklearn.model_selection import (
     cross_validate,
     cross_val_predict,
 )
+
+
+def evaluate_fold_weighted_classifier(
+    estimator,
+    X: pd.DataFrame,
+    y: pd.Series,
+    groups: pd.Series,
+    cv,
+    scoring: dict[str, str],
+    sample_weight_factory: Callable[[pd.Series], pd.Series],
+) -> tuple[dict[str, np.ndarray], pd.Series]:
+    """Evaluate a classifier using fold-specific training weights."""
+    scorers = {
+        score_name: get_scorer(scorer_name)
+        for score_name, scorer_name in scoring.items()
+    }
+    fold_scores = {
+        f"test_{score_name}": []
+        for score_name in scoring
+    }
+    prediction_values = np.empty(len(y), dtype=object)
+
+    for training_indices, validation_indices in cv.split(
+            X,
+            y,
+            groups,
+    ):
+        fold_estimator = clone(estimator)
+
+        X_train = X.iloc[training_indices]
+        y_train = y.iloc[training_indices]
+        groups_train = groups.iloc[training_indices]
+
+        X_validation = X.iloc[validation_indices]
+        y_validation = y.iloc[validation_indices]
+
+        training_weights = sample_weight_factory(
+            groups_train
+        )
+
+        fold_estimator.fit(
+            X_train,
+            y_train,
+            scaler__sample_weight=training_weights,
+            classifier__sample_weight=training_weights,
+        )
+
+        prediction_values[validation_indices] = (
+            fold_estimator.predict(X_validation)
+        )
+
+        for score_name, scorer in scorers.items():
+            fold_score = scorer(
+                fold_estimator,
+                X_validation,
+                y_validation,
+            )
+            fold_scores[f"test_{score_name}"].append(
+                fold_score
+            )
+
+    scores = {
+        score_name: np.asarray(score_values)
+        for score_name, score_values in fold_scores.items()
+    }
+    predictions = pd.Series(
+        prediction_values,
+        index=y.index,
+        name="predicted",
+    )
+
+    return scores, predictions
 
 
 def evaluate_classifier(

@@ -2,12 +2,100 @@ import numpy as np
 import pandas as pd
 
 from sklearn.dummy import DummyClassifier
+from sklearn.model_selection import GroupKFold
 
+from allen_brain_ml.datasets import make_donor_sample_weights
 from allen_brain_ml.evaluation import (
     evaluate_classifier,
     make_paired_fold_comparison,
     make_class_fold_diagnostics,
+    evaluate_fold_weighted_classifier,
 )
+from allen_brain_ml.models import make_logistic_regression_pipeline
+
+
+def test_evaluate_fold_weighted_classifier_builds_weights_per_fold():
+    X = pd.DataFrame(
+        {
+            "feature": [
+                -4.0,
+                -3.0,
+                -2.0,
+                -1.0,
+                1.0,
+                2.0,
+                3.0,
+                4.0,
+            ]
+        },
+        index=[10, 20, 30, 40, 50, 60, 70, 80],
+    )
+    y = pd.Series(
+        [
+            "aspiny",
+            "spiny",
+            "aspiny",
+            "spiny",
+            "aspiny",
+            "spiny",
+            "aspiny",
+            "spiny",
+        ],
+        index=X.index,
+    )
+    groups = pd.Series(
+        [101, 101, 202, 202, 303, 303, 404, 404],
+        index=X.index,
+        name="donor__id",
+    )
+    cv = GroupKFold(n_splits=2)
+
+    weight_factory_inputs = []
+
+    def recording_weight_factory(
+        training_groups: pd.Series,
+    ) -> pd.Series:
+        weight_factory_inputs.append(training_groups.copy())
+        return make_donor_sample_weights(training_groups)
+
+    model = make_logistic_regression_pipeline(
+        class_weight=None,
+    )
+
+    scores, predictions = evaluate_fold_weighted_classifier(
+        estimator=model,
+        X=X,
+        y=y,
+        groups=groups,
+        cv=cv,
+        scoring={"accuracy": "accuracy"},
+        sample_weight_factory=recording_weight_factory,
+    )
+
+    expected_training_groups = []
+
+    for training_indices, validation_indices in cv.split(
+            X,
+            y,
+            groups,
+    ):
+        fold_training_groups = groups.iloc[training_indices]
+        expected_training_groups.append(
+            fold_training_groups
+        )
+
+    assert len(weight_factory_inputs) == cv.get_n_splits()
+
+    for actual, expected in zip(
+        weight_factory_inputs,
+        expected_training_groups,
+        strict=True,
+    ):
+        pd.testing.assert_series_equal(actual, expected)
+
+    assert len(predictions) == len(y)
+    assert predictions.name == "predicted"
+    assert "test_accuracy" in scores
 
 
 def test_evaluate_classifier_returns_scores_and_predictions():

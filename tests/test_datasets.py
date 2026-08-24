@@ -4,6 +4,7 @@ import numpy as np
 from allen_brain_ml.datasets import (
     build_classification_cohort,
     make_grouped_holdout_split,
+    make_donor_sample_weights,
 )
 
 
@@ -60,3 +61,32 @@ def test_make_grouped_holdout_split_is_group_disjoint():
     assert sorted(all_indices.tolist()) == list(range(len(y)))
 
     assert set(y.iloc[test_indices]) == set(y)
+
+
+def test_make_donor_sample_weights_equalizes_donors():
+    groups = pd.Series(
+        [101, 202, 202, 303, 303, 303],
+        index=[10, 20, 30, 40, 50, 60],
+        name="donor__id",
+    )
+
+    result = make_donor_sample_weights(groups)
+
+    expected = pd.Series(
+        [2.0, 1.0, 1.0, 2 / 3, 2 / 3, 2 / 3],
+        index=groups.index,
+        name="sample_weight",
+    )
+
+    pd.testing.assert_series_equal(result, expected)
+
+    donor_total_weights = result.groupby(groups).sum()
+
+    np.testing.assert_allclose(
+        donor_total_weights.to_numpy(),
+        [2.0, 2.0, 2.0],
+    )
+    np.testing.assert_allclose(
+        result.mean(),
+        1.0,
+    )

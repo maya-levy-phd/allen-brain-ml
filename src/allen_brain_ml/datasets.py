@@ -62,3 +62,20 @@ def make_grouped_holdout_split(
     return development_indices, test_indices
 
 
+def make_donor_sample_weights(
+    groups: pd.Series,
+) -> pd.Series:
+    """Return mean-one inverse-frequency donor weights."""
+    donor_cell_counts = groups.value_counts()
+    cells_per_donor = groups.map(donor_cell_counts)
+
+    inverse_frequency_weights = 1.0 / cells_per_donor
+    normalized_weights = (
+            inverse_frequency_weights
+            / inverse_frequency_weights.mean()
+    )
+
+    return normalized_weights.rename("sample_weight")
+
+
+
