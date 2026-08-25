@@ -1,3 +1,5 @@
+import pytest
+
 import pandas as pd
 import numpy as np
 
@@ -5,7 +7,38 @@ from allen_brain_ml.datasets import (
     build_classification_cohort,
     make_grouped_holdout_split,
     make_donor_sample_weights,
+    make_spiny_vs_nonspiny_target,
 )
+
+
+def test_make_spiny_vs_nonspiny_target_rejects_unexpected_type():
+    dendrite_types = pd.Series(
+        ["aspiny", "unknown"],
+        name="tag__dendrite_type",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="Unexpected dendrite types",
+    ):
+        make_spiny_vs_nonspiny_target(dendrite_types)
+
+
+def test_make_spiny_vs_nonspiny_target():
+    dendrite_types = pd.Series(
+        ["aspiny", "sparsely spiny", "spiny"],
+        index=[10, 20, 30],
+        name="tag__dendrite_type",
+    )
+
+    result = make_spiny_vs_nonspiny_target(dendrite_types)
+
+    expected = pd.Series(
+        ["non-spiny", "non-spiny", "spiny"],
+        index=[10, 20, 30],
+        name="dendrite_class",
+    )
+    pd.testing.assert_series_equal(result, expected)
 
 
 def test_build_classification_cohort_selects_complete_mouse_cells():

@@ -1,12 +1,30 @@
 """Model construction for Allen Brain classification."""
 
 from sklearn.compose import ColumnTransformer
+from sklearn.tree import DecisionTreeClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import (
     StandardScaler,
     SplineTransformer,
 )
+
+
+def make_decision_tree_classifier(
+    *,
+    class_weight: str | dict | None = None,
+    max_depth: int | None = None,
+    min_samples_leaf: int = 1,
+    ccp_alpha: float = 0.0,
+    random_state: int = 42,
+) -> DecisionTreeClassifier:
+    return DecisionTreeClassifier(
+        class_weight=class_weight,
+        max_depth=max_depth,
+        min_samples_leaf=min_samples_leaf,
+        ccp_alpha=ccp_alpha,
+        random_state=random_state,
+    )
 
 
 def make_logistic_regression_pipeline(

@@ -13,6 +13,36 @@ GROUP_COLUMN = "donor__id"
 MOUSE_SPECIES = "Mus musculus"
 
 
+def make_spiny_vs_nonspiny_target(
+    dendrite_types: pd.Series,
+) -> pd.Series:
+    """Collapse dendrite annotations into spiny and non-spiny classes."""
+    class_mapping = {
+        "aspiny": "non-spiny",
+        "sparsely spiny": "non-spiny",
+        "spiny": "spiny",
+    }
+
+    unexpected_mask = ~dendrite_types.isin(class_mapping)
+    unexpected_types = (
+        dendrite_types
+        .loc[unexpected_mask]
+        .drop_duplicates()
+        .tolist()
+    )
+
+    if unexpected_types:
+        raise ValueError(
+            f"Unexpected dendrite types: {unexpected_types}"
+        )
+
+    return (
+        dendrite_types
+        .map(class_mapping)
+        .rename("dendrite_class")
+    )
+
+
 def build_classification_cohort(
     cells: pd.DataFrame,
 ) -> pd.DataFrame:
