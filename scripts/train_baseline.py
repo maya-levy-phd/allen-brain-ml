@@ -25,10 +25,12 @@ from allen_brain_ml.datasets import (
     build_classification_cohort,
     make_grouped_holdout_split,
     make_donor_sample_weights,
+    make_spiny_vs_nonspiny_target,
 )
 from allen_brain_ml.models import (
     make_logistic_regression_pipeline,
     make_spline_logistic_regression_pipeline,
+    make_decision_tree_classifier,
 )
 from allen_brain_ml.features import get_ephys_feature_columns
 from allen_brain_ml.evaluation import (
@@ -36,6 +38,7 @@ from allen_brain_ml.evaluation import (
     make_paired_fold_comparison,
     make_class_fold_diagnostics,
     evaluate_fold_weighted_classifier,
+    evaluate_tree_complexity,
 )
 
 
@@ -58,10 +61,12 @@ SCORING = {
 class PreparedClassificationData:
     development_features: pd.DataFrame
     development_target: pd.Series
+    development_binary_target: pd.Series
     development_groups: pd.Series
 
     test_features: pd.DataFrame
     test_target: pd.Series
+    test_binary_target: pd.Series
     test_groups: pd.Series
 
     cv_splits: list[tuple[np.ndarray, np.ndarray]]
@@ -1003,12 +1008,23 @@ def prepare_classification_data() -> PreparedClassificationData:
         )
     )
 
+    development_binary_target = (
+        make_spiny_vs_nonspiny_target(
+            development_target
+        )
+    )
+    test_binary_target = make_spiny_vs_nonspiny_target(
+        test_target
+    )
+
     return PreparedClassificationData(
         development_features=development_features,
         development_target=development_target,
+        development_binary_target=development_binary_target,
         development_groups=development_groups,
         test_features=test_features,
         test_target=test_target,
+        test_binary_target=test_binary_target,
         test_groups=test_groups,
         cv_splits=cv_splits,
     )
@@ -1057,6 +1073,17 @@ def print_classification_data_audit(
     ).intersection(data.test_groups)
 
     print(f"\nDonor overlap: {len(donor_overlap)}")
+
+    print_split_audit(
+        "Binary development",
+        data.development_binary_target,
+        data.development_groups,
+    )
+    print_split_audit(
+        "Binary test",
+        data.test_binary_target,
+        data.test_groups,
+    )
 
 
 def run_three_class_logistic_analysis(
@@ -1323,14 +1350,145 @@ def run_three_class_logistic_analysis(
     )
 
 
+def run_binary_classification_analysis(
+    data: PreparedClassificationData,
+) -> None:
+    """Compare models for spiny versus non-spiny classification."""
+    development_features = (
+        data.development_features.drop(
+            columns=["ef__avg_isi"]
+        )
+    )
+    development_target = (
+        data.development_binary_target
+    )
+
+    dummy_model = DummyClassifier(
+        strategy="most_frequent",
+    )
+
+    dummy_results, _ = run_classifier_experiment(
+        model_name="Binary most-frequent dummy",
+        estimator=dummy_model,
+        X=development_features,
+        y=development_target,
+        cv_splits=data.cv_splits,
+    )
+
+    logistic_model = (
+        make_logistic_regression_pipeline()
+    )
+
+    logistic_results, _ = run_classifier_experiment(
+        model_name="Binary logistic regression",
+        estimator=logistic_model,
+        X=development_features,
+        y=development_target,
+        cv_splits=data.cv_splits,
+    )
+
+    print_paired_model_comparison(
+        title=(
+            "Paired macro-F1 comparison between "
+            "binary dummy and logistic regression"
+        ),
+        reference_results=dummy_results,
+        comparison_results=logistic_results,
+        reference_name="dummy",
+        comparison_name="logistic",
+    )
+
+    tree_model = make_decision_tree_classifier()
+
+    tree_results, _ = run_classifier_experiment(
+        model_name="Unrestricted decision tree",
+        estimator=tree_model,
+        X=development_features,
+        y=development_target,
+        cv_splits=data.cv_splits,
+    )
+
+    print_paired_model_comparison(
+        title=(
+            "Paired macro-F1 comparison between "
+            "binary logistic regression and decision tree"
+        ),
+        reference_results=logistic_results,
+        comparison_results=tree_results,
+        reference_name="logistic",
+        comparison_name="tree",
+    )
+
+    tree_complexity = evaluate_tree_complexity(
+        estimator=tree_model,
+        X=development_features,
+        y=development_target,
+        cv_splits=data.cv_splits,
+    )
+
+    print("\nUnrestricted decision-tree complexity by fold")
+    print(
+        tree_complexity
+        .round(3)
+        .to_string(index=False)
+    )
+
+    regularized_tree_model = (
+        make_decision_tree_classifier(
+            min_samples_leaf=10,
+        )
+    )
+
+    regularized_tree_results, _ = (
+        run_classifier_experiment(
+            model_name=(
+                "Min-10-samples decision tree"
+            ),
+            estimator=regularized_tree_model,
+            X=development_features,
+            y=development_target,
+            cv_splits=data.cv_splits,
+        )
+    )
+
+    print_paired_model_comparison(
+        title=(
+            "Paired macro-F1 comparison between "
+            "unrestricted and min-10-samples trees"
+        ),
+        reference_results=tree_results,
+        comparison_results=regularized_tree_results,
+        reference_name="unrestricted",
+        comparison_name="min-10",
+    )
+
+    regularized_tree_complexity = (
+        evaluate_tree_complexity(
+            estimator=regularized_tree_model,
+            X=development_features,
+            y=development_target,
+            cv_splits=data.cv_splits,
+        )
+    )
+
+    print(
+        "\nMin-10-samples decision-tree "
+        "complexity by fold"
+    )
+    print(
+        regularized_tree_complexity
+        .round(3)
+        .to_string(index=False)
+    )
+
+
 def main() -> None:
     """Prepare the data and run the classification analyses."""
     data = prepare_classification_data()
 
     print_classification_data_audit(data)
     run_three_class_logistic_analysis(data)
-
-
+    run_binary_classification_analysis(data)
 
 
 if __name__ == "__main__":
