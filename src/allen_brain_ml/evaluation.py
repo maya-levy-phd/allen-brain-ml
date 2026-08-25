@@ -23,7 +23,9 @@ def evaluate_fold_weighted_classifier(
     X: pd.DataFrame,
     y: pd.Series,
     groups: pd.Series,
-    cv,
+    cv_splits: list[
+        tuple[np.ndarray, np.ndarray]
+    ],
     scoring: dict[str, str],
     sample_weight_factory: Callable[[pd.Series], pd.Series],
 ) -> tuple[dict[str, np.ndarray], pd.Series]:
@@ -38,11 +40,7 @@ def evaluate_fold_weighted_classifier(
     }
     prediction_values = np.empty(len(y), dtype=object)
 
-    for training_indices, validation_indices in cv.split(
-            X,
-            y,
-            groups,
-    ):
+    for training_indices, validation_indices in cv_splits:
         fold_estimator = clone(estimator)
 
         X_train = X.iloc[training_indices]

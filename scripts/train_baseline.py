@@ -1,6 +1,10 @@
+from collections.abc import Callable
 from pathlib import Path
 
+import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
+
 from sklearn.metrics import classification_report
 from sklearn.dummy import DummyClassifier
 from sklearn.model_selection import StratifiedGroupKFold
@@ -38,6 +42,313 @@ SCORING = {
     "balanced_accuracy": "balanced_accuracy",
     "macro_f1": "f1_macro",
 }
+
+
+def run_feature_audit(
+    X: pd.DataFrame,
+    y: pd.Series,
+    *,
+    save_figures: bool = False,
+) -> None:
+    """Print feature audits and optionally save figures."""
+    correlation_pairs = make_feature_correlation_table(X)
+
+    print("\nStrongest Spearman feature correlations")
+    print(
+        correlation_pairs.head(15).to_string(
+            index=False
+        )
+    )
+
+    rate_and_isi = X[
+        [
+            "ef__avg_firing_rate",
+            "ef__avg_isi",
+        ]
+    ]
+
+    print("\nPearson correlation")
+    print(rate_and_isi.corr(method="pearson"))
+
+    rate_isi_product = (
+        rate_and_isi["ef__avg_firing_rate"]
+        * rate_and_isi["ef__avg_isi"]
+    )
+
+    print("\nFiring-rate × ISI product")
+    print(rate_isi_product.describe())
+
+    distribution_summary = (
+        make_feature_distribution_summary(X)
+    )
+    distribution_summary["excess_kurtosis"] = (
+        X.kurt()
+    )
+
+    print("\nEphys feature-distribution summary")
+    print(
+        distribution_summary
+        .round(3)
+        .to_string()
+    )
+
+    tail_summary = (
+        distribution_summary[
+            ["skew", "excess_kurtosis"]
+        ]
+        .sort_values(
+            "excess_kurtosis",
+            ascending=False,
+        )
+    )
+
+    print("\nFeature skewness and excess kurtosis")
+    print(tail_summary.round(3).to_string())
+
+    grouped_features = X.groupby(
+        y,
+        observed=True,
+    )
+
+    class_medians = grouped_features.median().T
+    class_q25 = grouped_features.quantile(0.25)
+    class_q75 = grouped_features.quantile(0.75)
+    class_iqr = class_q75.sub(class_q25).T
+
+    print("\nMedian ephys features by dendrite class")
+    print(class_medians.round(3).to_string())
+
+    print("\nEphys feature IQR by dendrite class")
+    print(class_iqr.round(3).to_string())
+
+    if save_figures:
+        plot_firing_rate_vs_isi(
+            X,
+            PROJECT_ROOT
+            / "reports"
+            / "figures"
+            / "firing_rate_vs_isi.png",
+        )
+        save_feature_histograms(
+            X,
+            PROJECT_ROOT
+            / "reports"
+            / "figures"
+            / "ephys_feature_distributions.png",
+        )
+        save_class_feature_boxplots(
+            X,
+            y,
+            PROJECT_ROOT
+            / "reports"
+            / "figures"
+            / "ephys_features_by_class.png",
+        )
+
+
+def save_class_feature_boxplots(
+    X: pd.DataFrame,
+    y: pd.Series,
+    output_path: Path,
+) -> None:
+    """Save class-specific boxplots of model features."""
+    plot_data = X.copy()
+    plot_data["dendrite_type"] = y
+
+    class_order = [
+        "aspiny",
+        "sparsely spiny",
+        "spiny",
+    ]
+    plot_data["dendrite_type"] = pd.Categorical(
+        plot_data["dendrite_type"],
+        categories=class_order,
+        ordered=True,
+    )
+
+    figure, axes = plt.subplots(
+        3,
+        4,
+        figsize=(16, 11),
+    )
+    flat_axes = axes.ravel()
+
+    for ax, feature in zip(
+        flat_axes,
+        X.columns,
+    ):
+        plot_data.boxplot(
+            column=feature,
+            by="dendrite_type",
+            ax=ax,
+            grid=False,
+            showfliers=False,
+        )
+
+        ax.set_title(
+            feature.removeprefix("ef__")
+        )
+        ax.set_xlabel("")
+        ax.tick_params(
+            axis="x",
+            labelrotation=20,
+        )
+
+    for ax in flat_axes[len(X.columns):]:
+        ax.set_visible(False)
+
+    figure.suptitle(
+        "Ephys feature distributions by dendrite class",
+        fontsize=16,
+    )
+    figure.tight_layout(
+        rect=(0, 0, 1, 0.96)
+    )
+
+    output_path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+    figure.savefig(
+        output_path,
+        dpi=150,
+        bbox_inches="tight",
+    )
+    plt.close(figure)
+
+
+def save_feature_histograms(
+    X: pd.DataFrame,
+    output_path: Path,
+) -> None:
+    """Save histograms of all model features."""
+    display_features = X.rename(
+        columns=lambda column: column.removeprefix("ef__")
+    )
+
+    axes = display_features.hist(
+        bins=30,
+        figsize=(16, 10),
+        layout=(3, 4),
+        edgecolor="white",
+    )
+
+    for ax in axes.ravel():
+        if ax.has_data():
+            ax.set_ylabel("Cell count")
+        else:
+            ax.set_visible(False)
+
+    figure = axes.ravel()[0].get_figure()
+    figure.suptitle(
+        "Development-set ephys feature distributions",
+        fontsize=16,
+    )
+    figure.tight_layout(
+        rect=(0, 0, 1, 0.96)
+    )
+
+    output_path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+    figure.savefig(
+        output_path,
+        dpi=150,
+        bbox_inches="tight",
+    )
+    plt.close(figure)
+
+
+def plot_firing_rate_vs_isi(
+    X: pd.DataFrame,
+    output_path: Path,
+) -> None:
+    """Save a plot of firing rate against average ISI."""
+    ax = X.plot.scatter(
+        x="ef__avg_isi",
+        y="ef__avg_firing_rate",
+        alpha=0.35,
+        s=20,
+        figsize=(7, 5),
+    )
+
+    ax.set_title("Average firing rate versus average ISI")
+    ax.set_xlabel("Average ISI (ms)")
+    ax.set_ylabel("Average firing rate (Hz)")
+
+    figure = ax.get_figure()
+    figure.tight_layout()
+
+    output_path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+    figure.savefig(
+        output_path,
+        dpi=150,
+        bbox_inches="tight",
+    )
+    plt.close(figure)
+
+
+def make_feature_distribution_summary(
+    X: pd.DataFrame,
+) -> pd.DataFrame:
+    """Summarize the distributions of numeric model features."""
+    summary = (
+        X
+        .describe(
+            percentiles=[
+                0.01,
+                0.05,
+                0.50,
+                0.95,
+                0.99,
+            ]
+        )
+        .T
+    )
+
+    summary["skew"] = X.skew()
+
+    return summary.loc[
+        :,
+        [
+            "min",
+            "1%",
+            "5%",
+            "50%",
+            "95%",
+            "99%",
+            "max",
+            "mean",
+            "std",
+            "skew",
+        ],
+    ]
+
+
+def print_paired_model_comparison(
+    title: str,
+    reference_results: dict[str, np.ndarray],
+    comparison_results: dict[str, np.ndarray],
+    *,
+    reference_name: str,
+    comparison_name: str,
+    metric: str = "macro_f1",
+) -> None:
+    """Print a paired fold-level model comparison."""
+    comparison = make_paired_fold_comparison(
+        reference_results,
+        comparison_results,
+        metric=metric,
+        reference_name=reference_name,
+        comparison_name=comparison_name,
+    )
+
+    print(f"\n{title}")
+    print(comparison)
 
 
 def print_donor_weight_audit(
@@ -129,6 +440,113 @@ def print_classification_diagnostics(
     print(confusion_proportions)
 
 
+def make_feature_correlation_table(
+    X: pd.DataFrame,
+) -> pd.DataFrame:
+    """Return feature pairs ordered by absolute Spearman correlation."""
+    correlation_matrix = X.corr(method="spearman")
+
+    upper_triangle = np.triu(
+        np.ones(correlation_matrix.shape, dtype=bool),
+        k=1,
+    )
+
+    correlation_pairs = (
+        correlation_matrix
+        .where(upper_triangle)
+        .stack()
+        .rename("correlation")
+        .reset_index()
+        .rename(
+            columns={
+                "level_0": "feature_1",
+                "level_1": "feature_2",
+            }
+        )
+    )
+
+    correlation_pairs["absolute_correlation"] = (
+        correlation_pairs["correlation"].abs()
+    )
+
+    return correlation_pairs.sort_values(
+        "absolute_correlation",
+        ascending=False,
+        ignore_index=True,
+    )
+
+
+def run_classifier_experiment(
+    model_name: str,
+    estimator,
+    X: pd.DataFrame,
+    y: pd.Series,
+    cv_splits: list[
+        tuple[np.ndarray, np.ndarray]
+    ],
+) -> tuple[dict[str, np.ndarray], pd.Series]:
+    """Evaluate a classifier and print its diagnostics."""
+    results, predictions = evaluate_classifier(
+        estimator=estimator,
+        X=X,
+        y=y,
+        cv_splits=cv_splits,
+        scoring=SCORING,
+    )
+
+    print_cross_validation_results(
+        model_name,
+        results,
+    )
+    print_classification_diagnostics(
+        model_name,
+        y,
+        predictions,
+    )
+
+    return results, predictions
+
+
+def run_fold_weighted_classifier_experiment(
+    model_name: str,
+    estimator,
+    X: pd.DataFrame,
+    y: pd.Series,
+    groups: pd.Series,
+    cv_splits: list[
+        tuple[np.ndarray, np.ndarray]
+    ],
+    sample_weight_factory: Callable[
+        [pd.Series],
+        pd.Series,
+    ],
+) -> tuple[dict[str, np.ndarray], pd.Series]:
+    """Evaluate and report a fold-weighted classifier."""
+    results, predictions = (
+        evaluate_fold_weighted_classifier(
+            estimator=estimator,
+            X=X,
+            y=y,
+            groups=groups,
+            cv_splits=cv_splits,
+            scoring=SCORING,
+            sample_weight_factory=sample_weight_factory,
+        )
+    )
+
+    print_cross_validation_results(
+        model_name,
+        results,
+    )
+    print_classification_diagnostics(
+        model_name,
+        y,
+        predictions,
+    )
+
+    return results, predictions
+
+
 def main() -> None:
     """Load the data and assemble the classification dataset."""
     records = load_or_fetch_cell_records(CACHE_PATH)
@@ -179,16 +597,16 @@ def main() -> None:
         random_state=RANDOM_STATE,
     )
 
-    dummy_model = DummyClassifier(
-        strategy="most_frequent",
-    )
-
     cross_validation_splits = list(
         cross_validator.split(
             X_development,
             y_development,
             groups_development,
         )
+    )
+
+    dummy_model = DummyClassifier(
+        strategy="most_frequent",
     )
 
     dummy_results, _ = evaluate_classifier(
@@ -199,27 +617,21 @@ def main() -> None:
         scoring=SCORING,
     )
 
+    print_cross_validation_results(
+        "Most-frequent dummy",
+        dummy_results,
+    )
+
     logistic_model = make_logistic_regression_pipeline()
 
     logistic_results, logistic_predicted_classes = (
-        evaluate_classifier(
+        run_classifier_experiment(
+            "Unweighted logistic regression",
             logistic_model,
             X_development,
             y_development,
-            cv_splits=cross_validation_splits,
-            scoring=SCORING,
+            cross_validation_splits,
         )
-    )
-
-    print_cross_validation_results(
-        "Unweighted logistic regression",
-        logistic_results,
-    )
-
-    print_classification_diagnostics(
-        "Unweighted logistic regression",
-        y_development,
-        logistic_predicted_classes,
     )
 
     class_weighted_logistic_model = (
@@ -231,37 +643,23 @@ def main() -> None:
     (
         class_weighted_results,
         class_weighted_predicted_classes,
-    ) = evaluate_classifier(
+    ) = run_classifier_experiment(
+        "Class-weighted logistic regression",
         class_weighted_logistic_model,
         X_development,
         y_development,
-        cv_splits=cross_validation_splits,
-        scoring=SCORING,
+        cross_validation_splits,
     )
 
-    print_cross_validation_results(
-        "Class-weighted logistic regression",
-        class_weighted_results,
-    )
-
-    print_classification_diagnostics(
-        "Class-weighted logistic regression",
-        y_development,
-        class_weighted_predicted_classes,
-    )
-
-    fold_comparison = make_paired_fold_comparison(
+    print_paired_model_comparison(
+        "Paired macro-F1 comparison",
         logistic_results,
         class_weighted_results,
-        metric="macro_f1",
         reference_name="unweighted",
-        comparison_name="weighted",
+        comparison_name="class-weighted",
     )
 
-    print("\nPaired macro-F1 comparison")
-    print(fold_comparison)
-
-    SPARSE_CLASS = "sparsely spiny"
+    sparse_class = "sparsely spiny"
 
     fold_diagnostics_df = make_class_fold_diagnostics(
         y_development,
@@ -271,7 +669,7 @@ def main() -> None:
             "weighted": class_weighted_predicted_classes,
         },
         cv_splits=cross_validation_splits,
-        class_label=SPARSE_CLASS,
+        class_label=sparse_class,
     )
 
     formatted_diagnostics = (
@@ -298,39 +696,28 @@ def main() -> None:
     )
 
     (
-        donor_weighted_scores,
+        donor_weighted_results,
         donor_weighted_predictions,
-    ) = evaluate_fold_weighted_classifier(
+    ) = run_fold_weighted_classifier_experiment(
+        model_name="Donor-weighted logistic regression",
         estimator=donor_weighted_model,
         X=X_development,
         y=y_development,
         groups=groups_development,
-        cv=cross_validator,
-        scoring=SCORING,
+        cv_splits=cross_validation_splits,
         sample_weight_factory=make_donor_sample_weights,
     )
 
-    print_cross_validation_results(
-        "Donor-weighted logistic regression",
-        donor_weighted_scores,
-    )
-
-    print_classification_diagnostics(
-        "Donor-weighted logistic regression",
-        y_development,
-        donor_weighted_predictions,
-    )
-
-    donor_fold_comparison = make_paired_fold_comparison(
+    print_paired_model_comparison(
+        (
+            "Paired macro-F1 comparison between "
+            "donor-weighted and unweighted"
+        ),
         logistic_results,
-        donor_weighted_scores,
-        metric="macro_f1",
+        donor_weighted_results,
         reference_name="unweighted",
         comparison_name="donor-weighted",
     )
-
-    print("\nPaired macro-F1 comparison between donor-weighted and unweighted")
-    print(donor_fold_comparison)
 
     class_and_donor_weighted_model = (
         make_logistic_regression_pipeline(
@@ -339,40 +726,70 @@ def main() -> None:
     )
 
     (
-        class_and_donor_weighted_scores,
+        class_and_donor_weighted_results,
         class_and_donor_weighted_predictions,
-    ) = evaluate_fold_weighted_classifier(
+    ) = run_fold_weighted_classifier_experiment(
+        model_name=(
+            "Combined class and donor weighted "
+            "logistic regression"
+        ),
         estimator=class_and_donor_weighted_model,
         X=X_development,
         y=y_development,
         groups=groups_development,
-        cv=cross_validator,
-        scoring=SCORING,
+        cv_splits=cross_validation_splits,
         sample_weight_factory=make_donor_sample_weights,
     )
 
-    print_cross_validation_results(
-        "Combined class and donor weighted logistic regression",
-        class_and_donor_weighted_scores,
-    )
-
-    print_classification_diagnostics(
-        "Combined class and donor weighted logistic regression",
-        y_development,
-        class_and_donor_weighted_predictions,
-    )
-
-    combined_model_fold_comparison = make_paired_fold_comparison(
+    print_paired_model_comparison(
+        (
+            "Paired macro-F1 comparison between "
+            "a combined donor and class weighted and class-weighted"
+        ),
         class_weighted_results,
-        class_and_donor_weighted_scores,
-        metric="macro_f1",
+        class_and_donor_weighted_results,
         reference_name="class-weighted",
         comparison_name="combined",
     )
 
-    print("Paired macro-F1 comparison between class-and-donor-weighted "
-          "and class-weighted")
-    print(combined_model_fold_comparison)
+    run_feature_audit(
+        X_development,
+        y_development,
+    )
+
+    X_development_without_isi = (
+        X_development.drop(
+            columns=["ef__avg_isi"]
+        )
+    )
+
+    reduced_class_weighted_model = (
+        make_logistic_regression_pipeline(
+            class_weight="balanced",
+        )
+    )
+    (
+        reduced_class_weighted_results,
+        reduced_class_weighted_predicted_classes,
+    ) = run_classifier_experiment(
+        "Reduced class-weighted logistic regression",
+        reduced_class_weighted_model,
+        X_development_without_isi,
+        y_development,
+        cross_validation_splits,
+    )
+
+    print_paired_model_comparison(
+        (
+            "Paired macro-F1 comparison between "
+            "reduced-features-class-weighted and "
+            "full-features-class-weighted"
+        ),
+        class_weighted_results,
+        reduced_class_weighted_results,
+        reference_name="class-weighted",
+        comparison_name="reduced-class-weighted",
+    )
 
 
 if __name__ == "__main__":

@@ -49,6 +49,13 @@ def test_evaluate_fold_weighted_classifier_builds_weights_per_fold():
         name="donor__id",
     )
     cv = GroupKFold(n_splits=2)
+    cv_splits = list(
+        cv.split(
+            X,
+            y,
+            groups,
+        )
+    )
 
     weight_factory_inputs = []
 
@@ -67,24 +74,21 @@ def test_evaluate_fold_weighted_classifier_builds_weights_per_fold():
         X=X,
         y=y,
         groups=groups,
-        cv=cv,
+        cv_splits=cv_splits,
         scoring={"accuracy": "accuracy"},
         sample_weight_factory=recording_weight_factory,
     )
 
     expected_training_groups = []
 
-    for training_indices, validation_indices in cv.split(
-            X,
-            y,
-            groups,
-    ):
+    for training_indices, validation_indices in cv_splits:
         fold_training_groups = groups.iloc[training_indices]
         expected_training_groups.append(
             fold_training_groups
         )
 
-    assert len(weight_factory_inputs) == cv.get_n_splits()
+    assert len(weight_factory_inputs) == len(cv_splits)
+    assert len(expected_training_groups) == len(cv_splits)
 
     for actual, expected in zip(
         weight_factory_inputs,
