@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from dataclasses import dataclass
 from itertools import combinations
 from pathlib import Path
 
@@ -53,6 +54,17 @@ SCORING = {
     "balanced_accuracy": "balanced_accuracy",
     "macro_f1": "f1_macro",
 }
+@dataclass(frozen=True)
+class PreparedClassificationData:
+    development_features: pd.DataFrame
+    development_target: pd.Series
+    development_groups: pd.Series
+
+    test_features: pd.DataFrame
+    test_target: pd.Series
+    test_groups: pd.Series
+
+    cv_splits: list[tuple[np.ndarray, np.ndarray]]
 
 
 def make_vif_table(
@@ -953,50 +965,29 @@ def run_fold_weighted_classifier_experiment(
 
     return results, predictions
 
-
-def main() -> None:
-    """Load the data and assemble the classification dataset."""
+def prepare_classification_data() -> PreparedClassificationData:
+    """Load cells and create grouped development, test, and CV splits."""
     records = load_or_fetch_cell_records(CACHE_PATH)
     cells = prepare_cell_data(records)
 
     modeling_cells = build_classification_cohort(cells)
     ephys_columns = get_ephys_feature_columns(modeling_cells)
 
-    X = modeling_cells.loc[:, ephys_columns]
-    y = modeling_cells.loc[:, TARGET_COLUMN]
+    features = modeling_cells.loc[:, ephys_columns]
+    target = modeling_cells.loc[:, TARGET_COLUMN]
     groups = modeling_cells.loc[:, GROUP_COLUMN]
 
-    print(f"Samples: {len(X)}")
-    print(f"Features: {X.shape[1]}")
-    print(f"Donors: {groups.nunique()}")
-    print("\nClass counts:")
-    print(y.value_counts())
-
     development_indices, test_indices = (
-        make_grouped_holdout_split(y, groups)
+        make_grouped_holdout_split(target, groups)
     )
 
-    X_development = X.iloc[development_indices]
-    y_development = y.iloc[development_indices]
-    groups_development = groups.iloc[development_indices]
+    development_features = features.iloc[development_indices]
+    development_target = target.iloc[development_indices]
+    development_groups = groups.iloc[development_indices]
 
-    X_test = X.iloc[test_indices]
-    y_test = y.iloc[test_indices]
-    groups_test = groups.iloc[test_indices]
-
-    print_split_audit(
-        "Development",
-        y_development,
-        groups_development,
-    )
-    print_split_audit(
-        "Test",
-        y_test,
-        groups_test,
-    )
-
-    donor_overlap = set(groups_development).intersection(groups_test)
-    print(f"\nDonor overlap: {len(donor_overlap)}")
+    test_features = features.iloc[test_indices]
+    test_target = target.iloc[test_indices]
+    test_groups = groups.iloc[test_indices]
 
     cross_validator = StratifiedGroupKFold(
         n_splits=N_CV_SPLITS,
@@ -1004,13 +995,78 @@ def main() -> None:
         random_state=RANDOM_STATE,
     )
 
-    cross_validation_splits = list(
+    cv_splits = list(
         cross_validator.split(
-            X_development,
-            y_development,
-            groups_development,
+            development_features,
+            development_target,
+            development_groups,
         )
     )
+
+    return PreparedClassificationData(
+        development_features=development_features,
+        development_target=development_target,
+        development_groups=development_groups,
+        test_features=test_features,
+        test_target=test_target,
+        test_groups=test_groups,
+        cv_splits=cv_splits,
+    )
+
+
+def print_classification_data_audit(
+    data: PreparedClassificationData,
+) -> None:
+    """Print cohort dimensions and grouped-split diagnostics."""
+    all_targets = pd.concat(
+        [
+            data.development_target,
+            data.test_target,
+        ]
+    )
+    all_groups = pd.concat(
+        [
+            data.development_groups,
+            data.test_groups,
+        ]
+    )
+
+    print(f"Samples: {len(all_targets)}")
+    print(
+        "Features: "
+        f"{data.development_features.shape[1]}"
+    )
+    print(f"Donors: {all_groups.nunique()}")
+
+    print("\nClass counts:")
+    print(all_targets.value_counts())
+
+    print_split_audit(
+        "Development",
+        data.development_target,
+        data.development_groups,
+    )
+    print_split_audit(
+        "Test",
+        data.test_target,
+        data.test_groups,
+    )
+
+    donor_overlap = set(
+        data.development_groups
+    ).intersection(data.test_groups)
+
+    print(f"\nDonor overlap: {len(donor_overlap)}")
+
+
+def run_three_class_logistic_analysis(
+    data: PreparedClassificationData,
+) -> None:
+    """Run the three-class logistic-model analyses."""
+    X_development = data.development_features
+    y_development = data.development_target
+    groups_development = data.development_groups
+    cross_validation_splits = data.cv_splits
 
     dummy_model = DummyClassifier(
         strategy="most_frequent",
@@ -1265,6 +1321,16 @@ def main() -> None:
         reference_name="linear",
         comparison_name="spline",
     )
+
+
+def main() -> None:
+    """Prepare the data and run the classification analyses."""
+    data = prepare_classification_data()
+
+    print_classification_data_audit(data)
+    run_three_class_logistic_analysis(data)
+
+
 
 
 if __name__ == "__main__":
