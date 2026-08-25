@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from itertools import combinations
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -7,7 +8,11 @@ import pandas as pd
 
 from sklearn.metrics import classification_report
 from sklearn.dummy import DummyClassifier
-from sklearn.model_selection import StratifiedGroupKFold
+from sklearn.linear_model import LinearRegression
+from sklearn.model_selection import (
+    StratifiedGroupKFold,
+    cross_validate,
+)
 
 from allen_brain_ml.data import (
     load_or_fetch_cell_records,
@@ -22,6 +27,7 @@ from allen_brain_ml.datasets import (
 )
 from allen_brain_ml.models import (
     make_logistic_regression_pipeline,
+    make_spline_logistic_regression_pipeline,
 )
 from allen_brain_ml.features import get_ephys_feature_columns
 from allen_brain_ml.evaluation import (
@@ -36,12 +42,376 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CACHE_PATH = PROJECT_ROOT / "data" / "raw" / "cells.json"
 RANDOM_STATE = 42
 N_CV_SPLITS = 5
-
+SPLINE_FEATURES = (
+    "ef__avg_firing_rate",
+    "ef__peak_t_ramp",
+    "ef__ri",
+    "ef__tau",
+)
 SCORING = {
     "accuracy": "accuracy",
     "balanced_accuracy": "balanced_accuracy",
     "macro_f1": "f1_macro",
 }
+
+
+def make_vif_table(
+    X: pd.DataFrame,
+) -> pd.DataFrame:
+    """Calculate variance inflation factors for model features."""
+    records = []
+
+    for feature in X.columns:
+        feature_values = X.loc[:, feature]
+        other_features = X.drop(
+            columns=[feature]
+        )
+
+        auxiliary_model = LinearRegression()
+        auxiliary_model.fit(
+            other_features,
+            feature_values,
+        )
+
+        r_squared = auxiliary_model.score(
+            other_features,
+            feature_values,
+        )
+        tolerance = 1.0 - r_squared
+
+        vif = (
+            np.inf
+            if np.isclose(tolerance, 0.0)
+            else 1.0 / tolerance
+        )
+
+        records.append(
+            {
+                "feature": feature,
+                "r_squared": r_squared,
+                "tolerance": tolerance,
+                "vif": vif,
+            }
+        )
+
+    return (
+        pd.DataFrame.from_records(records)
+        .sort_values(
+            "vif",
+            ascending=False,
+            ignore_index=True,
+        )
+    )
+
+
+def run_coefficient_audit(
+    estimator,
+    X: pd.DataFrame,
+    y: pd.Series,
+    cv_splits: list[
+        tuple[np.ndarray, np.ndarray]
+    ],
+) -> pd.DataFrame:
+    """Audit standardized coefficients across CV folds."""
+    cv_results = cross_validate(
+        estimator=estimator,
+        X=X,
+        y=y,
+        cv=cv_splits,
+        scoring=SCORING,
+        return_estimator=True,
+    )
+
+    fold_estimators = cv_results["estimator"]
+
+    for fold_number, fold_estimator in enumerate(
+        fold_estimators,
+        start=1,
+    ):
+        classifier = fold_estimator.named_steps[
+            "classifier"
+        ]
+
+        print(
+            f"Fold {fold_number}: "
+            f"classes={classifier.classes_}, "
+            f"coefficient shape={classifier.coef_.shape}"
+        )
+
+    coefficient_table = make_fold_coefficient_table(
+        fold_estimators,
+        X.columns.to_list(),
+    )
+
+    expected_rows = (
+            len(fold_estimators)
+            * y.nunique()
+            * X.shape[1]
+    )
+
+    assert len(coefficient_table) == expected_rows
+
+    print("\nFold-specific coefficient table")
+    print(
+        coefficient_table
+        .head(12)
+        .round(3)
+        .to_string(index=False)
+    )
+
+    print(
+        f"\nCoefficient rows: "
+        f"{len(coefficient_table)}"
+    )
+
+    contrast_table = (
+        make_pairwise_coefficient_contrasts(
+            coefficient_table
+        )
+    )
+
+    contrast_summary = (
+        contrast_table
+        .groupby(
+            [
+                "class_a",
+                "class_b",
+                "feature",
+            ]
+        )["coefficient_contrast"]
+        .agg(
+            mean_contrast="mean",
+            std_contrast="std",
+            min_contrast="min",
+            max_contrast="max",
+        )
+        .reset_index()
+    )
+
+    contrast_summary["sign_stable"] = (
+            (contrast_summary["min_contrast"] > 0)
+            | (contrast_summary["max_contrast"] < 0)
+    )
+
+    contrast_summary["absolute_mean_contrast"] = (
+        contrast_summary["mean_contrast"].abs()
+    )
+
+    contrast_summary["odds_ratio_a_vs_b"] = np.exp(
+        contrast_summary["mean_contrast"]
+    )
+
+    ranked_contrasts = contrast_summary.sort_values(
+        [
+            "class_a",
+            "class_b",
+            "absolute_mean_contrast",
+        ],
+        ascending=[True, True, False],
+    )
+
+    top_contrasts = (
+        ranked_contrasts
+        .groupby(
+            ["class_a", "class_b"],
+            sort=False,
+        )
+        .head(5)
+    )
+
+    print("\nStrongest mean coefficient contrasts")
+    print(
+        top_contrasts[
+            [
+                "class_a",
+                "class_b",
+                "feature",
+                "mean_contrast",
+                "std_contrast",
+                "sign_stable",
+                "odds_ratio_a_vs_b",
+            ]
+        ]
+        .round(3)
+        .to_string(index=False)
+    )
+
+    stability_summary = (
+        contrast_summary
+        .groupby(
+            ["class_a", "class_b"]
+        )["sign_stable"]
+        .agg(
+            stable_features="sum",
+            total_features="size",
+        )
+        .reset_index()
+    )
+
+    stability_summary["stable_fraction"] = (
+            stability_summary["stable_features"]
+            / stability_summary["total_features"]
+    )
+
+    print("\nCoefficient sign stability by class pair")
+    print(
+        stability_summary
+        .round(3)
+        .to_string(index=False)
+    )
+
+    unstable_contrasts = (
+        contrast_summary
+        .loc[
+            ~contrast_summary["sign_stable"]
+        ]
+        .sort_values(
+            "absolute_mean_contrast",
+            ascending=False,
+        )
+    )
+
+    print("\nCoefficient contrasts with unstable signs")
+    print(
+        unstable_contrasts[
+            [
+                "class_a",
+                "class_b",
+                "feature",
+                "mean_contrast",
+                "std_contrast",
+                "min_contrast",
+                "max_contrast",
+            ]
+        ]
+        .round(3)
+        .to_string(index=False)
+    )
+
+    sign_consistency = (
+        contrast_table
+        .groupby(
+            [
+                "class_a",
+                "class_b",
+                "feature",
+            ]
+        )["coefficient_contrast"]
+        .agg(
+            median_contrast="median",
+            positive_folds=lambda values: (
+                    values > 0
+            ).sum(),
+            negative_folds=lambda values: (
+                    values < 0
+            ).sum(),
+        )
+        .reset_index()
+    )
+
+    sign_consistency["dominant_sign_folds"] = (
+        sign_consistency[
+            [
+                "positive_folds",
+                "negative_folds",
+            ]
+        ]
+        .max(axis=1)
+    )
+
+    sign_consistency["dominant_sign_fraction"] = (
+            sign_consistency["dominant_sign_folds"]
+            / len(fold_estimators)
+    )
+
+    contrast_summary = contrast_summary.merge(
+        sign_consistency,
+        on=[
+            "class_a",
+            "class_b",
+            "feature",
+        ],
+        validate="one_to_one",
+    )
+
+    unstable_consistency = (
+        contrast_summary
+        .loc[
+            ~contrast_summary["sign_stable"],
+            [
+                "class_a",
+                "class_b",
+                "feature",
+                "mean_contrast",
+                "median_contrast",
+                "positive_folds",
+                "negative_folds",
+                "dominant_sign_fraction",
+            ],
+        ]
+        .sort_values(
+            "dominant_sign_fraction",
+            ascending=False,
+        )
+    )
+
+    print("\nSign consistency of unstable contrasts")
+    print(
+        unstable_consistency
+        .round(3)
+        .to_string(index=False)
+    )
+
+    return coefficient_table
+
+
+def make_pairwise_coefficient_contrasts(
+    coefficient_table: pd.DataFrame,
+) -> pd.DataFrame:
+    """Calculate class-pair coefficient differences."""
+    coefficient_matrix = coefficient_table.pivot(
+        index=["fold", "feature"],
+        columns="dendrite_class",
+        values="coefficient",
+    )
+
+    contrast_tables = []
+
+    for class_a, class_b in combinations(
+        coefficient_matrix.columns,
+        2,
+    ):
+        class_contrast = (
+            coefficient_matrix[class_a]
+            - coefficient_matrix[class_b]
+        )
+
+        class_contrast = (
+            class_contrast
+            .rename("coefficient_contrast")
+            .reset_index()
+        )
+
+        class_contrast["class_a"] = class_a
+        class_contrast["class_b"] = class_b
+
+        contrast_tables.append(class_contrast)
+
+    contrasts = pd.concat(
+        contrast_tables,
+        ignore_index=True,
+    )
+
+    return contrasts.loc[
+        :,
+        [
+            "fold",
+            "class_a",
+            "class_b",
+            "feature",
+            "coefficient_contrast",
+        ],
+    ]
 
 
 def run_feature_audit(
@@ -440,6 +810,43 @@ def print_classification_diagnostics(
     print(confusion_proportions)
 
 
+def make_fold_coefficient_table(
+    fold_estimators: list,
+    feature_names: list[str],
+) -> pd.DataFrame:
+    """Return one row per fold, class, and feature coefficient."""
+    records = []
+
+    for fold_number, fold_estimator in enumerate(
+        fold_estimators,
+        start=1,
+    ):
+        classifier = fold_estimator.named_steps[
+            "classifier"
+        ]
+
+        for class_label, class_coefficients in zip(
+            classifier.classes_,
+            classifier.coef_,
+            strict=True,
+        ):
+            for feature_name, coefficient in zip(
+                feature_names,
+                class_coefficients,
+                strict=True,
+            ):
+                records.append(
+                    {
+                        "fold": fold_number,
+                        "dendrite_class": class_label,
+                        "feature": feature_name,
+                        "coefficient": coefficient,
+                    }
+                )
+
+    return pd.DataFrame.from_records(records)
+
+
 def make_feature_correlation_table(
     X: pd.DataFrame,
 ) -> pd.DataFrame:
@@ -789,6 +1196,74 @@ def main() -> None:
         reduced_class_weighted_results,
         reference_name="class-weighted",
         comparison_name="reduced-class-weighted",
+    )
+
+    print()
+    coefficient_table = run_coefficient_audit(
+        estimator=reduced_class_weighted_model,
+        X=X_development_without_isi,
+        y=y_development,
+        cv_splits=cross_validation_splits,
+    )
+
+    vif_table = make_vif_table(
+        X_development_without_isi
+    )
+
+    print("\nVariance inflation factors")
+    print(
+        vif_table
+        .round(3)
+        .to_string(index=False)
+    )
+
+    spline_features = list(SPLINE_FEATURES)
+
+    linear_features = [
+        feature
+        for feature in X_development_without_isi.columns
+        if feature not in SPLINE_FEATURES
+    ]
+
+    assert set(spline_features).isdisjoint(
+        linear_features
+    )
+    assert (
+            len(spline_features)
+            + len(linear_features)
+            == X_development_without_isi.shape[1]
+    )
+
+    spline_logistic_model = (
+        make_spline_logistic_regression_pipeline(
+            spline_features=spline_features,
+            linear_features=linear_features,
+            class_weight="balanced",
+            n_knots=5,
+            degree=3,
+        )
+    )
+
+    (
+        spline_logistic_results,
+        spline_logistic_predictions,
+    ) = run_classifier_experiment(
+        model_name="Spline logistic regression",
+        estimator=spline_logistic_model,
+        X=X_development_without_isi,
+        y=y_development,
+        cv_splits=cross_validation_splits,
+    )
+
+    print_paired_model_comparison(
+        (
+            "Paired macro-F1 comparison between "
+            "spline and linear logistic regression"
+        ),
+        reduced_class_weighted_results,
+        spline_logistic_results,
+        reference_name="linear",
+        comparison_name="spline",
     )
 
 

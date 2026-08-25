@@ -1,10 +1,84 @@
+from sklearn.compose import ColumnTransformer
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import (
+    StandardScaler,
+    SplineTransformer,
+)
 
 from allen_brain_ml.models import (
     make_logistic_regression_pipeline,
+    make_spline_logistic_regression_pipeline,
 )
+
+
+def test_make_spline_logistic_regression_pipeline():
+    spline_features = [
+        "firing_rate",
+        "peak_time",
+    ]
+    linear_features = [
+        "vrest",
+    ]
+
+    model = make_spline_logistic_regression_pipeline(
+        spline_features=spline_features,
+        linear_features=linear_features,
+        class_weight="balanced",
+        n_knots=5,
+        degree=3,
+    )
+
+    assert isinstance(model, Pipeline)
+
+    preprocessor = model.named_steps["preprocessor"]
+    assert isinstance(
+        preprocessor,
+        ColumnTransformer,
+    )
+
+    (
+        spline_name,
+        spline_pipeline,
+        selected_spline_features,
+    ) = preprocessor.transformers[0]
+
+    assert spline_name == "spline"
+    assert selected_spline_features == spline_features
+    assert isinstance(spline_pipeline, Pipeline)
+
+    spline_transformer = (
+        spline_pipeline.named_steps["spline"]
+    )
+    assert isinstance(
+        spline_transformer,
+        SplineTransformer,
+    )
+    assert spline_transformer.n_knots == 5
+    assert spline_transformer.degree == 3
+    assert spline_transformer.knots == "quantile"
+    assert spline_transformer.include_bias is False
+
+    assert isinstance(
+        spline_pipeline.named_steps["scaler"],
+        StandardScaler,
+    )
+
+    (
+        linear_name,
+        linear_transformer,
+        selected_linear_features,
+    ) = preprocessor.transformers[1]
+
+    assert linear_name == "linear"
+    assert selected_linear_features == linear_features
+    assert isinstance(
+        linear_transformer,
+        StandardScaler,
+    )
+
+    classifier = model.named_steps["classifier"]
+    assert classifier.class_weight == "balanced"
 
 
 def test_make_logistic_regression_pipeline():
