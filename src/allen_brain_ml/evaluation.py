@@ -16,6 +16,74 @@ from sklearn.model_selection import (
     cross_validate,
     cross_val_predict,
 )
+from sklearn.tree import DecisionTreeClassifier
+
+def evaluate_tree_complexity(
+    estimator: DecisionTreeClassifier,
+    X: pd.DataFrame,
+    y: pd.Series,
+    cv_splits: list[
+        tuple[np.ndarray, np.ndarray]
+    ],
+) -> pd.DataFrame:
+    """Summarize training performance and complexity by fold."""
+    cv_results = cross_validate(
+        estimator=estimator,
+        X=X,
+        y=y,
+        cv=cv_splits,
+        scoring="f1_macro",
+        return_train_score=True,
+        return_estimator=True,
+    )
+
+    records = []
+
+    for fold_index, (
+        training_indices,
+        _,
+    ) in enumerate(cv_splits):
+        fold_estimator = cv_results["estimator"][
+            fold_index
+        ]
+
+        training_leaf_ids = fold_estimator.apply(
+            X.iloc[training_indices]
+        )
+        leaf_cell_counts = (
+            pd.Series(training_leaf_ids)
+            .value_counts()
+        )
+
+        train_macro_f1 = cv_results["train_score"][
+            fold_index
+        ]
+        validation_macro_f1 = cv_results[
+            "test_score"
+        ][fold_index]
+
+        records.append(
+            {
+                "fold": fold_index + 1,
+                "train_macro_f1": train_macro_f1,
+                "validation_macro_f1": (
+                    validation_macro_f1
+                ),
+                "generalization_gap": (
+                    train_macro_f1
+                    - validation_macro_f1
+                ),
+                "depth": fold_estimator.get_depth(),
+                "leaves": (
+                    fold_estimator.get_n_leaves()
+                ),
+                "min_leaf_cells": (
+                    leaf_cell_counts.min()
+                ),
+            }
+        )
+
+    return pd.DataFrame.from_records(records)
 
 
 def evaluate_fold_weighted_classifier(

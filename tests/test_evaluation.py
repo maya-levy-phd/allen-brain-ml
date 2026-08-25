@@ -3,6 +3,7 @@ import pandas as pd
 
 from sklearn.dummy import DummyClassifier
 from sklearn.model_selection import GroupKFold
+from sklearn.tree import DecisionTreeClassifier
 
 from allen_brain_ml.datasets import make_donor_sample_weights
 from allen_brain_ml.evaluation import (
@@ -10,8 +11,76 @@ from allen_brain_ml.evaluation import (
     make_paired_fold_comparison,
     make_class_fold_diagnostics,
     evaluate_fold_weighted_classifier,
+    evaluate_tree_complexity,
 )
 from allen_brain_ml.models import make_logistic_regression_pipeline
+
+
+def test_evaluate_tree_complexity():
+    X = pd.DataFrame(
+        {
+            "feature": [
+                0.0,
+                1.0,
+                2.0,
+                3.0,
+                10.0,
+                11.0,
+                12.0,
+                13.0,
+            ]
+        }
+    )
+    y = pd.Series(
+        [
+            "non-spiny",
+            "non-spiny",
+            "non-spiny",
+            "non-spiny",
+            "spiny",
+            "spiny",
+            "spiny",
+            "spiny",
+        ]
+    )
+
+    cv_splits = [
+        (
+            np.array([0, 1, 4, 5]),
+            np.array([2, 3, 6, 7]),
+        ),
+        (
+            np.array([2, 3, 6, 7]),
+            np.array([0, 1, 4, 5]),
+        ),
+    ]
+
+    result = evaluate_tree_complexity(
+        estimator=DecisionTreeClassifier(
+            random_state=42
+        ),
+        X=X,
+        y=y,
+        cv_splits=cv_splits,
+    )
+
+    assert result["fold"].tolist() == [1, 2]
+    assert result["depth"].tolist() == [1, 1]
+    assert result["leaves"].tolist() == [2, 2]
+    assert result["min_leaf_cells"].tolist() == [2, 2]
+
+    np.testing.assert_allclose(
+        result["train_macro_f1"],
+        [1.0, 1.0],
+    )
+    np.testing.assert_allclose(
+        result["validation_macro_f1"],
+        [1.0, 1.0],
+    )
+    np.testing.assert_allclose(
+        result["generalization_gap"],
+        [0.0, 0.0],
+    )
 
 
 def test_evaluate_fold_weighted_classifier_builds_weights_per_fold():
