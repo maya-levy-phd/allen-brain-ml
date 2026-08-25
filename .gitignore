@@ -5,3 +5,7 @@ __pycache__/
 .DS_Store
 *.egg-info/
 data/raw/
+notebooks/
+reports/
+scripts/pandas_problem_set.py
+
