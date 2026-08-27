@@ -789,7 +789,6 @@ def print_cross_validation_results(
         )
 
 
-
 def print_classification_diagnostics(
     model_name: str,
     actual_classes: pd.Series,
@@ -1563,19 +1562,30 @@ def run_decision_tree_analysis(
         .to_string(index=False)
     )
 
-    run_cost_complexity_pruning_analysis(
+    selected_tree_results = run_tree_regularization_search(
         features=features,
         target=target,
         cv_splits=cv_splits,
     )
 
+    print_paired_model_comparison(
+        title=(
+            "Paired macro-F1 comparison between "
+            "logistic regression and the selected tree model"
+        ),
+        reference_results=logistic_cv_results,
+        comparison_results=selected_tree_results,
+        reference_name="logistic",
+        comparison_name="selected_tree",
+    )
 
-def run_cost_complexity_pruning_analysis(
+
+def run_tree_regularization_search(
     features: pd.DataFrame,
     target: pd.Series,
     cv_splits: list[tuple[np.ndarray, np.ndarray]],
-) -> None:
-    """Search and audit cost-complexity pruning."""
+) -> dict[str, np.ndarray]:
+    """Search and audit decision-tree regularization."""
     pruning_search = GridSearchCV(
         estimator=make_decision_tree_classifier(),
         param_grid={
@@ -1624,6 +1634,84 @@ def run_cost_complexity_pruning_analysis(
         .round(3)
         .to_string(index=False)
     )
+
+    regularization_search = GridSearchCV(
+        estimator=make_decision_tree_classifier(),
+        param_grid={
+            "ccp_alpha": [
+                0.0,
+                0.002,
+                0.005,
+                0.01,
+            ],
+            "min_samples_leaf": [
+                1,
+                5,
+                10,
+                20,
+            ],
+        },
+        scoring="f1_macro",
+        cv=cv_splits,
+        return_train_score=True,
+        refit=True,
+    )
+
+    regularization_search.fit(
+        features,
+        target,
+    )
+
+    print_grid_search_results(
+        title="Decision-tree regularization search",
+        cv_results=regularization_search.cv_results_,
+        parameter_names=[
+            "ccp_alpha",
+            "min_samples_leaf",
+        ],
+    )
+
+    selected_tree = regularization_search.best_estimator_
+
+    print(
+        "\nSelected parameters: "
+        f"{regularization_search.best_params_}"
+    )
+    print(
+        "Selected full-development refit tree depth: "
+        f"{selected_tree.get_depth()}"
+    )
+    print(
+        "Selected full-development refit tree leaves: "
+        f"{selected_tree.get_n_leaves()}"
+    )
+
+    selected_tree_complexity = evaluate_tree_complexity(
+        estimator=selected_tree,
+        X=features,
+        y=target,
+        cv_splits=cv_splits,
+    )
+
+    print("\nSelected hyperparameters: CV complexity by fold")
+    print(
+        selected_tree_complexity
+        .round(3)
+        .to_string(index=False)
+    )
+
+    double_regularized_tree_results, _ = (
+        run_classifier_experiment(
+            model_name=(
+                "Regularized tree with ccp_alpha=0.002 and min_samples_leaf=5"
+            ),
+            estimator=selected_tree,
+            X=features,
+            y=target,
+            cv_splits=cv_splits,
+        )
+    )
+    return double_regularized_tree_results
 
 
 def main() -> None:
