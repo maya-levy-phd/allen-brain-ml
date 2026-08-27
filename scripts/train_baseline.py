@@ -13,6 +13,7 @@ from sklearn.linear_model import LinearRegression
 from sklearn.model_selection import (
     StratifiedGroupKFold,
     cross_validate,
+    GridSearchCV,
 )
 
 from allen_brain_ml.data import (
@@ -1086,6 +1087,59 @@ def print_classification_data_audit(
     )
 
 
+def print_grid_search_results(
+    title: str,
+    cv_results: dict[str, object],
+    *,
+    parameter_names: list[str],
+) -> None:
+    """Print selected GridSearchCV results with readable names."""
+    parameter_columns = [
+        f"param_{name}"
+        for name in parameter_names
+    ]
+
+    results = (
+        pd.DataFrame(cv_results)
+        .loc[
+            :,
+            [
+                *parameter_columns,
+                "mean_train_score",
+                "mean_test_score",
+                "std_test_score",
+                "rank_test_score",
+            ],
+        ]
+        .rename(
+            columns={
+                **{
+                    f"param_{name}": name
+                    for name in parameter_names
+                },
+                "mean_train_score": (
+                    "mean_train_macro_f1"
+                ),
+                "mean_test_score": (
+                    "mean_validation_macro_f1"
+                ),
+                "std_test_score": (
+                    "std_validation_macro_f1"
+                ),
+                "rank_test_score": "rank",
+            }
+        )
+        .sort_values(parameter_names)
+    )
+
+    print(f"\n{title}")
+    print(
+        results
+        .round(4)
+        .to_string(index=False)
+    )
+
+
 def run_three_class_logistic_analysis(
     data: PreparedClassificationData,
 ) -> None:
@@ -1353,16 +1407,34 @@ def run_three_class_logistic_analysis(
 def run_binary_classification_analysis(
     data: PreparedClassificationData,
 ) -> None:
-    """Compare models for spiny versus non-spiny classification."""
+    """Compare models for binary dendrite classification."""
     development_features = (
         data.development_features.drop(
             columns=["ef__avg_isi"]
         )
     )
-    development_target = (
-        data.development_binary_target
+    development_target = data.development_binary_target
+
+    logistic_cv_results = run_binary_baseline_analysis(
+        features=development_features,
+        target=development_target,
+        cv_splits=data.cv_splits,
     )
 
+    run_decision_tree_analysis(
+        features=development_features,
+        target=development_target,
+        cv_splits=data.cv_splits,
+        logistic_cv_results=logistic_cv_results,
+    )
+
+
+def run_binary_baseline_analysis(
+        features: pd.DataFrame,
+        target: pd.Series,
+        cv_splits: list[tuple[np.ndarray, np.ndarray]],
+) -> dict[str, np.ndarray]:
+    """Compare binary dummy and logistic classifiers."""
     dummy_model = DummyClassifier(
         strategy="most_frequent",
     )
@@ -1370,21 +1442,21 @@ def run_binary_classification_analysis(
     dummy_results, _ = run_classifier_experiment(
         model_name="Binary most-frequent dummy",
         estimator=dummy_model,
-        X=development_features,
-        y=development_target,
-        cv_splits=data.cv_splits,
+        X=features,
+        y=target,
+        cv_splits=cv_splits,
     )
 
     logistic_model = (
         make_logistic_regression_pipeline()
     )
 
-    logistic_results, _ = run_classifier_experiment(
+    logistic_cv_results, _ = run_classifier_experiment(
         model_name="Binary logistic regression",
         estimator=logistic_model,
-        X=development_features,
-        y=development_target,
-        cv_splits=data.cv_splits,
+        X=features,
+        y=target,
+        cv_splits=cv_splits,
     )
 
     print_paired_model_comparison(
@@ -1393,19 +1465,29 @@ def run_binary_classification_analysis(
             "binary dummy and logistic regression"
         ),
         reference_results=dummy_results,
-        comparison_results=logistic_results,
+        comparison_results=logistic_cv_results,
         reference_name="dummy",
         comparison_name="logistic",
     )
 
+    return logistic_cv_results
+
+
+def run_decision_tree_analysis(
+    features: pd.DataFrame,
+    target: pd.Series,
+    cv_splits: list[tuple[np.ndarray, np.ndarray]],
+    logistic_cv_results: dict[str, np.ndarray],
+) -> None:
+    """Evaluate decision-tree performance and complexity."""
     tree_model = make_decision_tree_classifier()
 
     tree_results, _ = run_classifier_experiment(
         model_name="Unrestricted decision tree",
         estimator=tree_model,
-        X=development_features,
-        y=development_target,
-        cv_splits=data.cv_splits,
+        X=features,
+        y=target,
+        cv_splits=cv_splits,
     )
 
     print_paired_model_comparison(
@@ -1413,7 +1495,7 @@ def run_binary_classification_analysis(
             "Paired macro-F1 comparison between "
             "binary logistic regression and decision tree"
         ),
-        reference_results=logistic_results,
+        reference_results=logistic_cv_results,
         comparison_results=tree_results,
         reference_name="logistic",
         comparison_name="tree",
@@ -1421,9 +1503,9 @@ def run_binary_classification_analysis(
 
     tree_complexity = evaluate_tree_complexity(
         estimator=tree_model,
-        X=development_features,
-        y=development_target,
-        cv_splits=data.cv_splits,
+        X=features,
+        y=target,
+        cv_splits=cv_splits,
     )
 
     print("\nUnrestricted decision-tree complexity by fold")
@@ -1445,9 +1527,9 @@ def run_binary_classification_analysis(
                 "Min-10-samples decision tree"
             ),
             estimator=regularized_tree_model,
-            X=development_features,
-            y=development_target,
-            cv_splits=data.cv_splits,
+            X=features,
+            y=target,
+            cv_splits=cv_splits,
         )
     )
 
@@ -1465,9 +1547,9 @@ def run_binary_classification_analysis(
     regularized_tree_complexity = (
         evaluate_tree_complexity(
             estimator=regularized_tree_model,
-            X=development_features,
-            y=development_target,
-            cv_splits=data.cv_splits,
+            X=features,
+            y=target,
+            cv_splits=cv_splits,
         )
     )
 
@@ -1477,6 +1559,68 @@ def run_binary_classification_analysis(
     )
     print(
         regularized_tree_complexity
+        .round(3)
+        .to_string(index=False)
+    )
+
+    run_cost_complexity_pruning_analysis(
+        features=features,
+        target=target,
+        cv_splits=cv_splits,
+    )
+
+
+def run_cost_complexity_pruning_analysis(
+    features: pd.DataFrame,
+    target: pd.Series,
+    cv_splits: list[tuple[np.ndarray, np.ndarray]],
+) -> None:
+    """Search and audit cost-complexity pruning."""
+    pruning_search = GridSearchCV(
+        estimator=make_decision_tree_classifier(),
+        param_grid={
+            "ccp_alpha": [
+                0.0,
+                0.0005,
+                0.001,
+                0.002,
+                0.005,
+                0.01,
+                0.02,
+                0.05,
+            ]
+        },
+        scoring="f1_macro",
+        cv=cv_splits,
+        return_train_score=True,
+        refit=True,
+    )
+
+    pruning_search.fit(
+        features,
+        target,
+    )
+
+    print_grid_search_results(
+        title="Cost-complexity pruning search",
+        cv_results=pruning_search.cv_results_,
+        parameter_names=["ccp_alpha"],
+    )
+
+    selected_tree_model = make_decision_tree_classifier(
+        ccp_alpha=pruning_search.best_params_["ccp_alpha"],
+    )
+
+    selected_tree_complexity = evaluate_tree_complexity(
+        estimator=selected_tree_model,
+        X=features,
+        y=target,
+        cv_splits=cv_splits,
+    )
+
+    print("\nSelected pruned-tree complexity by fold")
+    print(
+        selected_tree_complexity
         .round(3)
         .to_string(index=False)
     )
