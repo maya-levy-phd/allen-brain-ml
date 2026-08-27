@@ -11,12 +11,55 @@ from sklearn.base import (
 from sklearn.metrics import (
     classification_report,
     get_scorer,
+    accuracy_score,
+    balanced_accuracy_score,
+    f1_score,
 )
 from sklearn.model_selection import (
     cross_validate,
     cross_val_predict,
 )
 from sklearn.tree import DecisionTreeClassifier
+
+
+def evaluate_classifier_holdout(
+    estimator,
+    development_features: pd.DataFrame,
+    development_target: pd.Series,
+    test_features: pd.DataFrame,
+    test_target: pd.Series,
+) -> tuple[dict[str, float], pd.Series]:
+    """Fit a classifier and evaluate it on held-out data."""
+    estimator.fit(
+        development_features,
+        development_target,
+    )
+
+    predictions = pd.Series(
+        estimator.predict(test_features),
+        index=test_target.index,
+        name="predicted",
+    )
+
+    metrics = {
+        "accuracy": accuracy_score(
+            test_target,
+            predictions,
+        ),
+        "balanced_accuracy": balanced_accuracy_score(
+            test_target,
+            predictions,
+        ),
+        "macro_f1": f1_score(
+            test_target,
+            predictions,
+            average="macro",
+            zero_division=0,
+        ),
+    }
+
+    return metrics, predictions
+
 
 def evaluate_tree_complexity(
     estimator: DecisionTreeClassifier,

@@ -1,3 +1,5 @@
+import pytest
+
 import numpy as np
 import pandas as pd
 
@@ -12,8 +14,54 @@ from allen_brain_ml.evaluation import (
     make_class_fold_diagnostics,
     evaluate_fold_weighted_classifier,
     evaluate_tree_complexity,
+    evaluate_classifier_holdout,
 )
 from allen_brain_ml.models import make_logistic_regression_pipeline
+
+
+def test_evaluate_classifier_holdout():
+    development_features = pd.DataFrame(
+        {"feature": [0.0, 1.0, 2.0]},
+        index=[10, 11, 12],
+    )
+    development_target = pd.Series(
+        ["non-spiny", "non-spiny", "spiny"],
+        index=development_features.index,
+    )
+
+    test_features = pd.DataFrame(
+        {"feature": [3.0, 4.0]},
+        index=[20, 21],
+    )
+    test_target = pd.Series(
+        ["non-spiny", "spiny"],
+        index=test_features.index,
+    )
+
+    metrics, predictions = evaluate_classifier_holdout(
+        estimator=DummyClassifier(
+            strategy="most_frequent"
+        ),
+        development_features=development_features,
+        development_target=development_target,
+        test_features=test_features,
+        test_target=test_target,
+    )
+
+    assert predictions.tolist() == [
+        "non-spiny",
+        "non-spiny",
+    ]
+    assert predictions.index.equals(test_target.index)
+    assert predictions.name == "predicted"
+
+    assert metrics == pytest.approx(
+        {
+            "accuracy": 0.5,
+            "balanced_accuracy": 0.5,
+            "macro_f1": 1 / 3,
+        }
+    )
 
 
 def test_evaluate_tree_complexity():
