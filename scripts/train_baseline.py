@@ -40,6 +40,7 @@ from allen_brain_ml.evaluation import (
     make_class_fold_diagnostics,
     evaluate_fold_weighted_classifier,
     evaluate_tree_complexity,
+    evaluate_classifier_holdout,
 )
 
 
@@ -1714,6 +1715,76 @@ def run_tree_regularization_search(
     return double_regularized_tree_results
 
 
+def run_binary_holdout_evaluation(
+    data: PreparedClassificationData,
+) -> None:
+    """Evaluate frozen binary classifiers on the held-out test set."""
+    development_features = (
+        data.development_features.drop(
+            columns=["ef__avg_isi"]
+        )
+    )
+    test_features = data.test_features.drop(
+        columns=["ef__avg_isi"]
+    )
+
+    final_models = {
+        "Binary logistic regression": (
+            make_logistic_regression_pipeline()
+        ),
+        "Regularized decision tree": (
+            make_decision_tree_classifier(
+                ccp_alpha=0.002,
+                min_samples_leaf=5,
+            )
+        ),
+    }
+
+    metric_records = []
+
+    print("\nFINAL HELD-OUT TEST EVALUATION")
+
+    for model_name, estimator in final_models.items():
+        metrics, predictions = (
+            evaluate_classifier_holdout(
+                estimator=estimator,
+                development_features=(
+                    development_features
+                ),
+                development_target=(
+                    data.development_binary_target
+                ),
+                test_features=test_features,
+                test_target=data.test_binary_target,
+            )
+        )
+
+        metric_records.append(
+            {
+                "model": model_name,
+                **metrics,
+            }
+        )
+
+        print_classification_diagnostics(
+            f"{model_name} held-out test",
+            data.test_binary_target,
+            predictions,
+        )
+
+    metric_summary = (
+        pd.DataFrame.from_records(metric_records)
+        .set_index("model")
+    )
+
+    print("\nHeld-out test metric summary")
+    print(
+        metric_summary
+        .round(3)
+        .to_string()
+    )
+
+
 def main() -> None:
     """Prepare the data and run the classification analyses."""
     data = prepare_classification_data()
@@ -1721,6 +1792,7 @@ def main() -> None:
     print_classification_data_audit(data)
     run_three_class_logistic_analysis(data)
     run_binary_classification_analysis(data)
+    run_binary_holdout_evaluation(data)
 
 
 if __name__ == "__main__":
