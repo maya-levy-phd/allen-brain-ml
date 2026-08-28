@@ -5,8 +5,32 @@ from pathlib import Path
 
 import pandas as pd
 
-from allen_brain_ml.allen_api import get_cells
+from allen_brain_ml.allen_api import (
+    get_cells,
+    download_well_known_file,
+)
 
+
+def get_or_download_reconstruction(
+    *,
+    specimen_id: int,
+    well_known_file_id: int,
+    cache_directory: Path,
+) -> Path:
+    """Return a cached reconstruction, downloading it if necessary."""
+    reconstruction_path = (
+        cache_directory
+        / f"specimen_{specimen_id}"
+        / "reconstruction.swc"
+    )
+
+    if reconstruction_path.is_file():
+        return reconstruction_path
+
+    return download_well_known_file(
+        file_id=well_known_file_id,
+        destination=reconstruction_path,
+    )
 
 
 def prepare_cell_data(
