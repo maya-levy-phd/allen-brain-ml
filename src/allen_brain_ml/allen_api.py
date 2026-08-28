@@ -1,4 +1,5 @@
 """Functions for interacting with the Allen Brain Observatory API."""
+from pathlib import Path
 
 import requests
 
@@ -6,6 +7,37 @@ BASE_URL = "https://api.brain-map.org/api/v2/data/query.json"
 SPECIMEN_CRITERIA = "model::Specimen"
 EXPERIMENT_CRITERIA = "model::Experiment"
 CELL_CRITERIA = "model::ApiCellTypesSpecimenDetail"
+WELL_KNOWN_FILE_DOWNLOAD_URL = (
+    "https://api.brain-map.org/api/v2/"
+    "well_known_file_download"
+)
+
+
+def download_well_known_file(
+    file_id: int,
+    destination: Path,
+    *,
+    timeout: int = 30,
+) -> Path:
+    """Download an Allen WellKnownFile to a local path."""
+    url = (
+        f"{WELL_KNOWN_FILE_DOWNLOAD_URL}/"
+        f"{file_id}"
+    )
+
+    response = requests.get(
+        url,
+        timeout=timeout,
+    )
+    response.raise_for_status()
+
+    destination.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+    destination.write_bytes(response.content)
+
+    return destination
 
 
 def get_cells(limit: int = 100, page_size: int = 100) -> list[dict]:

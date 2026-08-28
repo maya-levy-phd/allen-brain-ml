@@ -8,7 +8,47 @@ from allen_brain_ml.allen_api import (
     get_cells,
     get_experiments,
     get_specimens,
+    download_well_known_file,
 )
+
+
+def test_download_well_known_file(
+    tmp_path,
+):
+    file_content = (
+        b"# Example SWC\n"
+        b"1 1 0.0 0.0 0.0 1.0 -1\n"
+    )
+
+    response = Mock()
+    response.content = file_content
+
+    destination = (
+        tmp_path
+        / "specimen_556968207"
+        / "reconstruction.swc"
+    )
+
+    with patch(
+        "allen_brain_ml.allen_api.requests.get",
+        return_value=response,
+    ) as mock_get:
+        result = download_well_known_file(
+            file_id=759943447,
+            destination=destination,
+        )
+
+    assert result == destination
+    assert destination.read_bytes() == file_content
+
+    mock_get.assert_called_once_with(
+        (
+            "https://api.brain-map.org/api/v2/"
+            "well_known_file_download/759943447"
+        ),
+        timeout=30,
+    )
+    response.raise_for_status.assert_called_once_with()
 
 
 def test_get_specimens():
